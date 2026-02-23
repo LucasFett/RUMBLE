@@ -1,0 +1,278 @@
+---
+title: "Using RUMBLE for Microbiome Biomarker Discovery"
+author: "Lucas Fett"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+vignette: >
+  %\VignetteIndexEntry{Using RUMBLE for Microbiome Biomarker Discovery}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE,
+    comment = "#>",
+    fig.width = 9,
+    fig.height = 7,
+    fig.align = "center",
+    out.width = "100%",
+    dpi = 72,
+    warning = FALSE,
+    message = FALSE,
+    crop = NULL 
+)
+```
+# Introduction
+
+The **RUMBLE** (Robust Unified Microbiome Biomarker Learning Engine)
+package provides a streamlined workflow for identifying robust microbial
+biomarkers from high-throughput sequencing data using a consensus machine
+learning approach.
+
+The pipeline executes the following steps automatically:
+
+1. **Preprocessing**: Taxonomic aggregation, optional removal of
+   unclassified taxa, prevalence filtering, and CLR transformation.
+
+2. **Training**: Random Forest, XGBoost, Elastic Net, and KNN via
+   `tidymodels`.
+
+3. **Tuning**: Hyperparameter optimization with stratified
+   cross-validation.
+
+4. **Evaluation**: Performance metrics (F1-Score, AUC, Accuracy,
+   Balanced Accuracy) and confusion matrices.
+
+5. **Interpretability**: SHAP values and permutation importance via
+   `DALEX`.
+
+This vignette demonstrates the full analysis pipeline using two input
+formats: a `phyloseq` object and a count matrix.
+
+# Part 1: Analysis with a phyloseq Object
+
+## Loading Data
+
+First, we load the package and the example dataset provided.
+
+```{r load_phyloseq}
+library(RUMBLE)
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+
+# Load example data
+ps_path <- system.file("extdata",
+    "PRJEB38465_phyloseq_com_metadados_completos.rds",
+    package = "RUMBLE")
+
+if (ps_path == "") {
+    stop("Example data not found. Check package installation.")
+}
+
+ps <- readRDS(ps_path)
+print(ps)
+```
+
+## Exploring Metadata
+
+```{r explore_metadata}
+meta <- as.data.frame(sample_data(ps))
+cat("Target variable distribution (ses):\n")
+print(table(meta$ses))
+```
+
+## Scenario A: Publication-Quality Analysis (Reference Only)
+
+The default parameters in RUMBLE are configured for robust, publication-ready
+analysis. For real-world studies,
+you should run the pipeline as follows:
+
+```{r publication_quality_code, eval=FALSE}
+# This code block is for demonstration purposes and is not executed here.
+results_pub <- RUMBLE(
+    input        = ps,
+    outcome_var  = "ses",
+    tax_level    = "Genus",
+    project_name = "My_Study_Analysis",
+    output_dir   = "results_folder",  # Saves plots/tables to disk
+    n_cores      = 4                 # Use parallel processing
+)
+```
+
+## Scenario B: Fast Exploratory Analysis (Executed)
+
+For this tutorial, we will run a fast version of the pipeline with reduced
+parameters to demonstrate functionality quickly. We reduce the grid size and
+repetitions to minimize computation time.
+
+```{r run_exploratory, results='hide'}
+set.seed(42)
+
+# Run pipeline with reduced parameters for speed
+results_fast <- RUMBLE(
+    input        = ps,
+    outcome_var  = "ses",
+    tax_level    = "Genus",
+    project_name = "Fast_Exploration",
+    output_dir   = tempdir(),
+    grid_size    = 10,
+    shap_reps    = 10,
+    xgb_trees    = 100,
+    rf_trees     = 100,
+    n_cores      = 4
+)
+```
+
+## Results: Metrics Table
+
+```{r metrics_table_ps}
+knitr::kable(results_fast$metrics, digits = 3,
+             caption = "Model performance metrics (phyloseq input).")
+```
+
+## Results: All Visualizations
+
+### 1. Metrics Comparison
+
+```{r plot_ps_metrics, fig.height=5, fig.cap="Barplot comparing performance metrics across models."}
+print(results_fast$plots$metrics)
+```
+
+### 2. ROC Curves
+
+```{r plot_ps_roc, fig.height=5, fig.cap="ROC curves with AUC values for each model."}
+print(results_fast$plots$roc)
+```
+
+### 3. Confusion Matrices
+
+```{r plot_ps_cm, fig.height=8, fig.cap="Confusion matrices for each model on the test set."}
+print(results_fast$plots$cm)
+```
+
+### 4. SHAP Consensus (Global Biomarkers)
+
+```{r plot_ps_shap, fig.height=8, fig.cap="Top biomarkers ranked by mean absolute SHAP across all models."}
+print(results_fast$plots$shap)
+```
+
+### 5. SHAP Distribution by Model
+
+```{r plot_ps_shap_dist, fig.height=8, fig.cap="Distribution of SHAP values for top features, broken down by model."}
+print(results_fast$plots$shap_dist)
+```
+
+### 6. Permutation Importance (Barplot)
+
+```{r plot_ps_perm, fig.height=7, fig.cap="Top features ranked by permutation importance (delta loss)."}
+print(results_fast$plots$perm)
+```
+
+### 7. Permutation Importance (Heatmap)
+
+```{r plot_ps_perm_heat, fig.height=8, fig.cap="Heatmap of permutation importance across models."}
+print(results_fast$plots$perm_heat)
+```
+
+## Global Importance Table
+**Column Definitions:**
+
+* **`mean_shap`**: Represents the global importance magnitude. It is calculated as the **mean of the absolute SHAP values** ($|SHAP|$).
+* **`direction`**: Indicates the stability of the effect's sign. It is the **mean of the sign** of the SHAP values (ranging from -1 for consistently negative effects to +1 for consistently positive effects).
+
+```{r importance_table_ps}
+knitr::kable(
+    head(results_fast$importance$global_importance, 15),
+    digits = 4,
+    caption = "Top 15 biomarkers by SHAP consensus (phyloseq input)."
+)
+```
+
+
+# Part 2: Analysis with a Count Matrix
+
+RUMBLE also accepts a standard count matrix and a separate metadata
+data.frame. We demonstrate this by extracting the data from our
+`phyloseq` object.
+
+## Extracting Matrix and Metadata
+
+```{r extract_matrix}
+# Load dependencies
+library(microbiome)
+library(phyloseq)
+
+# 1. Taxonomic Aggregation (Genus Level)
+
+if ("Genus" %in% rank_names(ps)) {
+  ps_genus <- microbiome::aggregate_taxa(ps, level = "Genus")
+  message("Aggregated data for Gender level via tax_table.")
+} else {
+  warning("Rank 'Genus' not found. Using raw data..")
+  ps_genus <- ps
+}
+
+# 2. Extraction of the Count Matrix (features)
+otu_mat <- as.data.frame(otu_table(ps_genus))
+
+# Machine Learning requires samples in the rows.
+if (taxa_are_rows(ps_genus)) {
+    otu_mat <- as.data.frame(t(otu_mat))
+}
+
+# 3. Metadata Extraction (target)
+meta_df <- as.data.frame(sample_data(ps_genus))
+
+# Integrity Verification (Sanity Check)
+stopifnot(all(rownames(otu_mat) == rownames(meta_df)))
+cat("Dimensões Finais: ", nrow(otu_mat), " amostras x ", ncol(otu_mat), " features.\n")
+```
+
+## Running the Pipeline
+
+When using a count matrix, set `tax_level = NULL` since there is no
+taxonomic table for aggregation.
+
+```{r run_matrix, results='hide'}
+set.seed(42)
+
+results_mat <- RUMBLE(
+    input        = otu_mat,
+    metadata     = meta_df,
+    outcome_var  = "ses",
+    tax_level    = NULL,
+    project_name = "Matrix_Analysis",
+    grid_size    = 10,
+    shap_reps    = 10,
+    xgb_trees    = 100,
+    rf_trees     = 100,
+    n_cores      = 4
+)
+```
+
+## Verification
+
+We verify the results by inspecting the metrics table and the ROC curve.
+The results should be identical to the phyloseq run.
+
+```{r metrics_matrix}
+knitr::kable(results_mat$metrics, digits = 3,
+             caption = "Model performance metrics (Matrix Input).")
+```
+
+```{r plot_matrix_roc, fig.cap="ROC curves for matrix input."}
+print(results_mat$plots$roc)
+```
+
+Other plots are available in `results_mat$plots` but are omitted here for brevity.
+
+# Session Information
+
+```{r session_info}
+sessionInfo()
+```

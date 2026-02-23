@@ -1,0 +1,68 @@
+Package: RUMBLE
+Type: Package
+Title: Robust Unified Microbiome Biomarker Learning Engine
+Version: 0.99.0
+Authors@R: 
+    person("Lucas", "Fett", email = "lucas.fett2021@gmail.com",
+           role = c("aut", "cre"),
+           comment = c(ORCID = "0009-0006-0596-3991"))
+Description: RUMBLE implements a consensus machine learning framework for
+    identifying microbial biomarkers from high-throughput sequencing data.
+    The package integrates multiple classification algorithms via the 
+    tidymodels ecosystem, and provides model-agnostic interpretability 
+    through SHAP values and permutation importance (via DALEX). It handles 
+    compositional microbiome data using centered log-ratio (CLR) 
+    transformations.
+License: GPL-3
+Encoding: UTF-8
+LazyData: false
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+biocViews:
+    Software,
+    StatisticalMethod,
+    Classification,
+    Microbiome,
+    Sequencing
+Depends:
+    R (>= 4.3.0)
+Imports:
+    DALEX,
+    doParallel,
+    dplyr,
+    furrr,
+    future,
+    ggplot2,
+    ggsci,
+    methods,
+    microbiome,
+    parallel,
+    parsnip,
+    phyloseq,
+    purrr,
+    readr,
+    recipes,
+    rlang,
+    rsample,
+    stats,
+    themis,
+    tidyr,
+    tune,
+    viridis,
+    withr,
+    workflows,
+    yardstick
+Suggests:
+    BiocStyle,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    tidymodels,
+    glmnet,
+    kknn,
+    ranger,
+    xgboost,
+    magick
+VignetteBuilder: knitr
+BugReports: https://github.com/LucasFett/RUMBLE/issues
+URL: https://github.com/LucasFett/RUMBLE

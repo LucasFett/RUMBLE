@@ -1,0 +1,13 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^vignettes/results$
+^vignettes/.*_files$
+^vignettes/.*\.png$
+^RUMBLE\.BiocCheck$
+^.*\.tar\.gz$
+^logger\.log$
+^\.ipynb_checkpoints$
+^tests/testthat/_snaps$
+^vignettes/.*_cache$
+^vignettes/.*_files$
+^vignettes/.*\.html$
