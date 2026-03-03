@@ -95,12 +95,13 @@ you should run the pipeline as follows:
 ```{r publication_quality_code, eval=FALSE}
 # This code block is for demonstration purposes and is not executed here.
 results_pub <- RUMBLE(
-    input        = ps,
-    outcome_var  = "ses",
-    tax_level    = "Genus",
-    project_name = "My_Study_Analysis",
-    output_dir   = "results_folder",  # Saves plots/tables to disk
-    n_cores      = 4                 # Use parallel processing
+    input             = ps,
+    outcome_var       = "ses",
+    class_of_interest = "Low",        
+    tax_level         = "Genus",
+    project_name      = "My_Study_Analysis",
+    output_dir        = "results_folder",  # Saves plots/tables to disk
+    n_cores           = 4                  # Use parallel processing
 )
 ```
 
@@ -115,16 +116,17 @@ set.seed(42)
 
 # Run pipeline with reduced parameters for speed
 results_fast <- RUMBLE(
-    input        = ps,
-    outcome_var  = "ses",
-    tax_level    = "Genus",
-    project_name = "Fast_Exploration",
-    output_dir   = tempdir(),
-    grid_size    = 10,
-    shap_reps    = 10,
-    xgb_trees    = 100,
-    rf_trees     = 100,
-    n_cores      = 4
+    input             = ps,
+    outcome_var       = "ses",
+    class_of_interest = "Low",        
+    tax_level         = "Genus",
+    project_name      = "Fast_Exploration",
+    output_dir        = tempdir(),
+    grid_size         = 10,
+    shap_reps         = 10,
+    xgb_trees         = 100,
+    rf_trees          = 100,
+    n_cores           = 4
 )
 ```
 
@@ -242,16 +244,17 @@ taxonomic table for aggregation.
 set.seed(42)
 
 results_mat <- RUMBLE(
-    input        = otu_mat,
-    metadata     = meta_df,
-    outcome_var  = "ses",
-    tax_level    = NULL,
-    project_name = "Matrix_Analysis",
-    grid_size    = 10,
-    shap_reps    = 10,
-    xgb_trees    = 100,
-    rf_trees     = 100,
-    n_cores      = 4
+    input             = otu_mat,
+    metadata          = meta_df,
+    outcome_var       = "ses",
+    class_of_interest = "Low",           
+    tax_level         = NULL,
+    project_name      = "Matrix_Analysis",
+    grid_size         = 10,
+    shap_reps         = 10,
+    xgb_trees         = 100,
+    rf_trees          = 100,
+    n_cores           = 4
 )
 ```
 

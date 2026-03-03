@@ -19,7 +19,7 @@ computeFeatureImportance(
 
 \item{train_data}{Training data.frame.}
 
-\item{target_var}{Target variable name.}
+\item{target_var}{Name of the target variable.}
 
 \item{top_n}{Number of top features to retain (default 20).}
 
@@ -29,6 +29,9 @@ computeFeatureImportance(
 \item{n_cores}{Number of cores for parallel processing (default 1).}
 
 \item{verbose}{Logical. Whether to print progress messages.}
+
+\item{class_of_interest}{Character. The class of interest (must be the second
+factor level). SHAP values will be calculated with respect to this class.}
 }
 \value{
 A named list containing:

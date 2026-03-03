@@ -22,6 +22,7 @@ test_that("RUMBLE works with synthetic matrix data", {
     input = otu,
     metadata = meta,
     outcome_var = "Group",
+    class_of_interest = "Disease",
     tax_level = NULL,
     project_name = "Test_Run",
     output_dir = tempdir(),

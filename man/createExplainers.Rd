@@ -4,7 +4,7 @@
 \alias{createExplainers}
 \title{Create DALEX Explainers for Trained Models}
 \usage{
-createExplainers(final_models, train_data, target_var)
+createExplainers(final_models, train_data, target_var, class_of_interest)
 }
 \arguments{
 \item{final_models}{List of model results from the pipeline. Each element
@@ -45,7 +45,8 @@ Wraps each fitted tidymodels workflow into a DALEX explainer object.
   )
 
   # 4. Create Explainers
-  explainers <- createExplainers(final_models, df, "Group")
+  explainers <- createExplainers(final_models, df, "Group",
+                                 class_of_interest = "B")
 
   # Check class
   class(explainers$RF)
