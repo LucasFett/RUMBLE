@@ -7,7 +7,7 @@
 plotShapGlobal(
   global_importance,
   target_var,
-  positive_class,
+  class_of_interest,
   negative_class,
   top_n = 20L
 )
@@ -19,9 +19,11 @@ plotShapGlobal(
 
 \item{target_var}{Character. Name of the target variable.}
 
-\item{positive_class}{Character. Label of the positive class.}
+\item{class_of_interest}{Character. Label of the class of interest.
+Used for labeling the plot axes and legend.}
 
-\item{negative_class}{Character. Label of the negative class.}
+\item{negative_class}{Character. Label of the negative/reference class.
+Used for labeling the plot axes and legend.}
 
 \item{top_n}{Integer. Number of top features to display (default 20).}
 }

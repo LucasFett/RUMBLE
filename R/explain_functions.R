@@ -39,14 +39,30 @@
 #'   )
 #'
 #'   # 4. Create Explainers
-#'   explainers <- createExplainers(final_models, df, "Group")
+#'   explainers <- createExplainers(final_models, df, "Group",
+#'                                  class_of_interest = "B")
 #'
 #'   # Check class
 #'   class(explainers$RF)
 #'
-createExplainers <- function(final_models, train_data, target_var) {
+createExplainers <- function(final_models, train_data, target_var,
+                             class_of_interest) {
   message("Creating DALEX explainers...")
-  positive_class <- levels(train_data[[target_var]])[2L]
+
+  # Validate class_of_interest
+  if (missing(class_of_interest)) {
+    stop("'class_of_interest' is required in createExplainers().")
+  }
+
+  # Ensure class_of_interest is the second level (positive class for DALEX)
+  lvls <- levels(train_data[[target_var]])
+  if (lvls[2L] != class_of_interest) {
+    stop("Expected '", class_of_interest, "' to be the second factor level, ",
+         "but found '", lvls[2L], "'. Please ensure factor levels are reordered ",
+         "before calling createExplainers().")
+  }
+
+  positive_class <- class_of_interest
 
   # Convert target to numeric 0/1 for DALEX
   y_numeric <- ifelse(
@@ -81,7 +97,9 @@ createExplainers <- function(final_models, train_data, target_var) {
 #'
 #' @param explainers List of DALEX explainers (output of \code{createExplainers}).
 #' @param train_data Training data.frame.
-#' @param target_var Target variable name.
+#' @param target_var Name of the target variable.
+#' @param class_of_interest Character. The class of interest (must be the second
+#'   factor level). SHAP values will be calculated with respect to this class.
 #' @param top_n Number of top features to retain (default 20).
 #' @param repetitions Number of repetitions (B) for importance calculation
 #'   (default 10).
@@ -186,7 +204,7 @@ computeFeatureImportance <- function(explainers,
     shap_val$model <- exp$label
     shap_val
   })
-
+  shap$variable <- sub(" =.*", "", as.character(shap$variable))
   # --- CLEANUP ---
   if (n_cores > 1) {
     future::plan(future::sequential)

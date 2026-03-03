@@ -116,8 +116,10 @@ plotRocCurves <- function(final_models, target_var) {
 #'      \code{\link{computeFeatureImportance}} containing columns
 #'      \code{variable}, \code{mean_shap}, and \code{direction}.
 #' @param target_var Character. Name of the target variable.
-#' @param positive_class Character. Label of the positive class.
-#' @param negative_class Character. Label of the negative class.
+#' @param class_of_interest Character. Label of the class of interest.
+#'   Used for labeling the plot axes and legend.
+#' @param negative_class Character. Label of the negative/reference class.
+#'   Used for labeling the plot axes and legend.
 #' @param top_n Integer. Number of top features to display (default 20).
 #'
 #' @return A \code{ggplot} object.
@@ -135,8 +137,18 @@ plotRocCurves <- function(final_models, target_var) {
 #'
 #' @export
 plotShapGlobal <- function(global_importance, target_var,
-                           positive_class, negative_class,
+                           class_of_interest,
+                           negative_class,
                            top_n = 20L) {
+  # Validate parameters
+  if (missing(class_of_interest)) {
+    stop("'class_of_interest' is required in plotShapGlobal().")
+  }
+
+  if (missing(negative_class)) {
+    stop("'negative_class' is required in plotShapGlobal().")
+  }
+
   df_plot <- head(global_importance, top_n)
 
   df_plot$directional_value <- ifelse(
@@ -165,7 +177,7 @@ plotShapGlobal <- function(global_importance, target_var,
       title = "Biomarker Consensus (SHAP)",
       subtitle = paste0(
         target_var, ": <- ", negative_class,
-        " | ", positive_class, " ->"
+        " | ", class_of_interest, " ->"
       )
     ) +
     ggplot2::theme_minimal(base_size = 12)

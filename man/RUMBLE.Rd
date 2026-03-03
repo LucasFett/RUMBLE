@@ -8,6 +8,7 @@ RUMBLE(
   input,
   metadata = NULL,
   outcome_var,
+  class_of_interest,
   tax_level = NULL,
   project_name = "RUMBLE_analysis",
   output_dir = NULL,
@@ -36,6 +37,15 @@ matching the sample identifiers in \code{input}.}
 
 \item{outcome_var}{Character. Name of the binary outcome variable in
 the metadata (e.g., \code{"ses"}).}
+
+\item{class_of_interest}{Character. Label of the class of interest for
+disease/condition association analysis (e.g., \code{"CRC"}, \code{"disease"}).
+This parameter is mandatory and must match one of the levels in the
+\code{outcome_var} variable. SHAP values and feature directions will be
+calculated with respect to this class. For example, if
+\code{class_of_interest = "CRC"}, positive SHAP values indicate features
+that increase the probability of CRC, while negative values indicate
+protective features.}
 
 \item{tax_level}{Character or \code{NULL}. Taxonomic rank for
 aggregation (e.g., \code{"Genus"}). Set to \code{NULL} to skip
@@ -145,6 +155,7 @@ and optionally saved to disk.
     results <- RUMBLE(
       input = ps,
       outcome_var = "ses",
+      class_of_interest = "Low",
       tax_level = "Genus",
       project_name = "Demo_Analysis",
       output_dir = tempdir(),
@@ -164,6 +175,7 @@ and optionally saved to disk.
     results_publication <- RUMBLE(
       input = ps,
       outcome_var = "ses",
+      class_of_interest = "Low",
       tax_level = "Genus",
       project_name = "Publication_Analysis",
       output_dir = tempdir(),

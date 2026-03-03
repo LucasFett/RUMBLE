@@ -19,6 +19,14 @@
 #'   matching the sample identifiers in \code{input}.
 #' @param outcome_var Character. Name of the binary outcome variable in
 #'   the metadata (e.g., \code{"ses"}).
+#' @param class_of_interest Character. Label of the class of interest for
+#'   disease/condition association analysis (e.g., \code{"CRC"}, \code{"disease"}).
+#'   This parameter is mandatory and must match one of the levels in the
+#'   \code{outcome_var} variable. SHAP values and feature directions will be
+#'   calculated with respect to this class. For example, if
+#'   \code{class_of_interest = "CRC"}, positive SHAP values indicate features
+#'   that increase the probability of CRC, while negative values indicate
+#'   protective features.
 #' @param tax_level Character or \code{NULL}. Taxonomic rank for
 #'   aggregation (e.g., \code{"Genus"}). Set to \code{NULL} to skip
 #'   aggregation (default).
@@ -97,6 +105,7 @@
 #'     results <- RUMBLE(
 #'       input = ps,
 #'       outcome_var = "ses",
+#'       class_of_interest = "Low",
 #'       tax_level = "Genus",
 #'       project_name = "Demo_Analysis",
 #'       output_dir = tempdir(),
@@ -116,6 +125,7 @@
 #'     results_publication <- RUMBLE(
 #'       input = ps,
 #'       outcome_var = "ses",
+#'       class_of_interest = "Low",
 #'       tax_level = "Genus",
 #'       project_name = "Publication_Analysis",
 #'       output_dir = tempdir(),
@@ -136,24 +146,25 @@
 #' @importFrom ggplot2 ggsave
 #' @export
 RUMBLE <- function(input,
-                        metadata = NULL,
-                        outcome_var,
-                        tax_level = NULL,
-                        project_name = "RUMBLE_analysis",
-                        output_dir = NULL,
-                        n_cores = 1L,
-                        train_prop = 0.7,
-                        cv_folds = 5L,
-                        grid_size = 30L,
-                        top_n = 20L,
-                        shap_reps = 100L,
-                        xgb_trees = 1000L,
-                        rf_trees = 500L,
-                        min_prevalence = 0.05,
-                        min_abundance = 0.0001,
-                        remove_unclassified = FALSE,
-                        seed = 42L,
-                        verbose = TRUE) {
+                   metadata = NULL,
+                   outcome_var,
+                   class_of_interest,
+                   tax_level = NULL,
+                   project_name = "RUMBLE_analysis",
+                   output_dir = NULL,
+                   n_cores = 1L,
+                   train_prop = 0.7,
+                   cv_folds = 5L,
+                   grid_size = 30L,
+                   top_n = 20L,
+                   shap_reps = 100L,
+                   xgb_trees = 1000L,
+                   rf_trees = 500L,
+                   min_prevalence = 0.05,
+                   min_abundance = 0.0001,
+                   remove_unclassified = FALSE,
+                   seed = 42L,
+                   verbose = TRUE) {
 
   msg <- function(...) {
     if (verbose) message(...)
@@ -208,12 +219,35 @@ RUMBLE <- function(input,
     stop("RUMBLE currently supports binary classification only. ",
          "Found ", length(lvls), " levels in '", outcome_var, "'.")
   }
+  # Validate class_of_interest parameter
+  if (missing(class_of_interest)) {
+    stop("'class_of_interest' is required. Specify which class you want to study ",
+         "(e.g., class_of_interest = 'CRC').")
+  }
 
-  positive_class <- lvls[2L]
-  negative_class <- lvls[1L]
+  if (!class_of_interest %in% lvls) {
+    stop("'", class_of_interest, "' not found in '", outcome_var, "'. ",
+         "Available classes: ", paste(lvls, collapse = ", "))
+  }
+
+  # Reorder factor levels to ensure class_of_interest is the second level
+  # This ensures that SHAP values are calculated with respect to the class of interest
+  negative_class <- lvls[lvls != class_of_interest]
+
+  if (length(negative_class) != 1L) {
+    stop("Expected exactly one negative class, but found ", length(negative_class), ".")
+  }
+
+  analysis_df[[outcome_var]] <- factor(
+    analysis_df[[outcome_var]],
+    levels = c(negative_class, class_of_interest)
+  )
+
+  msg("Reordered factor levels: '", negative_class, "' (reference) vs '",
+      class_of_interest, "' (class of interest)")
 
   msg("Target: '", outcome_var, "' (",
-      negative_class, " vs ", positive_class, ")")
+      negative_class, " vs ", class_of_interest, ")")
   msg("Samples for analysis: ", nrow(analysis_df))
 
   ## ==================================================================
@@ -254,7 +288,8 @@ RUMBLE <- function(input,
   ## ==================================================================
   msg("[5/5] Computing feature importance...")
   explainers <- createExplainers(
-    final_models, train_data, outcome_var
+    final_models, train_data, outcome_var,
+    class_of_interest = class_of_interest
   )
   importance <- computeFeatureImportance(
     explainers, train_data, outcome_var,
@@ -272,7 +307,9 @@ RUMBLE <- function(input,
     cm        = plotConfusionMatrices(final_models, outcome_var),
     shap      = plotShapGlobal(
       importance$global_importance, outcome_var,
-      positive_class, negative_class, top_n
+      class_of_interest = class_of_interest,
+      negative_class = negative_class,
+      top_n = top_n
     ),
     shap_dist = plotShapDistribution(
       importance$shap_raw, top_n = top_n
