@@ -13,18 +13,5 @@ plotMetricsComparison(final_models)
 A \code{ggplot} object.
 }
 \description{
-Produces a grouped barplot comparing performance metrics (F1, AUC,
-Accuracy, Balanced Accuracy) across all models.
-}
-\examples{
-  # Mock metrics
-  mock_met <- data.frame(
-    .metric = c("accuracy", "roc_auc"),
-    .estimate = c(0.85, 0.92)
-  )
-  mock_models <- list(RF = list(metrics = mock_met))
-
-  plotMetricsComparison(mock_models)
-
-
+Produces a grouped barplot comparing performance metrics across all models.
 }

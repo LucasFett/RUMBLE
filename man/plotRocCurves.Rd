@@ -18,20 +18,3 @@ A \code{ggplot} object.
 Generates ROC curves with AUC values in the legend for each model
 evaluated on the test set.
 }
-\examples{
-  # Mock data structure
-  mock_preds <- data.frame(
-    Status = factor(rep(c("Control", "Disease"), each = 10)),
-    .pred_Disease = runif(20),
-    .pred_class = factor(sample(c("Control", "Disease"), 20, replace = TRUE))
-  )
-
-  mock_models <- list(
-    RF = list(predictions = mock_preds),
-    XGB = list(predictions = mock_preds)
-  )
-
-  plotRocCurves(mock_models, "Status")
-
-
-}

@@ -12,10 +12,12 @@
 #' @importFrom viridis scale_fill_viridis
 #' @importFrom rlang sym
 #' @importFrom dplyr group_by summarize mutate left_join pull filter
-#'      slice_head arrange desc ungroup select
+#'      slice_head arrange desc ungroup select n_distinct bind_rows
 #' @importFrom tidyr pivot_wider pivot_longer
 #' @importFrom purrr imap_dfr
 #' @importFrom yardstick roc_curve roc_auc conf_mat
+#' @importFrom ggbeeswarm geom_quasirandom
+#' @importFrom patchwork wrap_plots
 NULL
 
 
@@ -28,22 +30,6 @@ NULL
 #' @param target_var Character. Name of the target variable.
 #'
 #' @return A \code{ggplot} object.
-#'
-#' @examples
-#'   # Mock data structure
-#'   mock_preds <- data.frame(
-#'     Status = factor(rep(c("Control", "Disease"), each = 10)),
-#'     .pred_Disease = runif(20),
-#'     .pred_class = factor(sample(c("Control", "Disease"), 20, replace = TRUE))
-#'   )
-#'
-#'   mock_models <- list(
-#'     RF = list(predictions = mock_preds),
-#'     XGB = list(predictions = mock_preds)
-#'   )
-#'
-#'   plotRocCurves(mock_models, "Status")
-#'
 #'
 #' @export
 plotRocCurves <- function(final_models, target_var) {
@@ -117,29 +103,18 @@ plotRocCurves <- function(final_models, target_var) {
 #'      \code{variable}, \code{mean_shap}, and \code{direction}.
 #' @param target_var Character. Name of the target variable.
 #' @param class_of_interest Character. Label of the class of interest.
-#'   Used for labeling the plot axes and legend.
 #' @param negative_class Character. Label of the negative/reference class.
-#'   Used for labeling the plot axes and legend.
 #' @param top_n Integer. Number of top features to display (default 20).
+#' @param metric_name Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").
 #'
 #' @return A \code{ggplot} object.
-#'
-#' @examples
-#'   # Mock data
-#'   mock_global <- data.frame(
-#'     variable = paste0("Taxon_", 1:5),
-#'     mean_shap = runif(5, 0.1, 0.5),
-#'     direction = sample(c(-1, 1), 5, replace = TRUE)
-#'   )
-#'
-#'   plotShapGlobal(mock_global, "Status", "Disease", "Control", top_n = 5)
-#'
 #'
 #' @export
 plotShapGlobal <- function(global_importance, target_var,
                            class_of_interest,
                            negative_class,
-                           top_n = 20L) {
+                           top_n = 20L,
+                           metric_name = "Spearman") {
   # Validate parameters
   if (missing(class_of_interest)) {
     stop("'class_of_interest' is required in plotShapGlobal().")
@@ -167,14 +142,14 @@ plotShapGlobal <- function(global_importance, target_var,
     ggplot2::geom_col(width = 0.8) +
     ggplot2::coord_flip() +
     ggplot2::scale_fill_gradient2(
-      low = "#d62728", mid = "#f7f7f7", high = "#1f77b4",
+      low = "#1f77b4", mid = "gray", high = "#d62728",
       midpoint = 0, limits = c(-1, 1),
       name = "Effect direction"
     ) +
     ggplot2::labs(
       x = NULL,
-      y = "Mean SHAP contribution (directional)",
-      title = "Biomarker Consensus (SHAP)",
+      y = paste0("Mean SHAP contribution (", metric_name, ")"),
+      title = paste0("Biomarker Consensus (", metric_name, ")"),
       subtitle = paste0(
         target_var, ": <- ", negative_class,
         " | ", class_of_interest, " ->"
@@ -210,7 +185,6 @@ plotConfusionMatrices <- function(final_models, target_var) {
   cm_df <- cm_df %>%
     dplyr::group_by(model, Truth) %>%
     dplyr::mutate(Prop = Freq / sum(Freq) * 100) %>%
-    # Lógica para contraste: Se a barra for escura (>50%), texto branco
     dplyr::mutate(text_col = ifelse(Prop > 50, "white", "black")) %>%
     dplyr::ungroup()
 
@@ -222,19 +196,17 @@ plotConfusionMatrices <- function(final_models, target_var) {
     ggplot2::geom_text(
       ggplot2::aes(
         label = paste0(Freq, "\n(", round(Prop, 1), "%)"),
-        color = text_col  # Usa a cor calculada dinamicamente
+        color = text_col
       ),
       size = 3.5, fontface = "bold"
     ) +
     ggplot2::facet_wrap(~ model) +
-    # Paleta Gradiente Azul (Clean e Profissional)
     ggplot2::scale_fill_gradient(
-      low = "#eff3ff",  # Azul muito claro (quase branco)
-      high = "#08519c", # Azul escuro forte
+      low = "#eff3ff",
+      high = "#08519c",
       limits = c(0, 100),
       name = "Proportion (%)"
     ) +
-    # Garante que o ggplot entenda que "white" e "black" são cores reais
     ggplot2::scale_color_identity() +
     ggplot2::labs(
       title = "Confusion Matrices (Test Set)",
@@ -243,30 +215,18 @@ plotConfusionMatrices <- function(final_models, target_var) {
     ggplot2::theme_minimal(base_size = 12) +
     ggplot2::theme(
       panel.grid = ggplot2::element_blank(),
-      axis.text = ggplot2::element_text(color = "black") # Eixos pretos para leitura
+      axis.text = ggplot2::element_text(color = "black")
     )
 }
 
 
 #' Plot Metrics Comparison Barplot
 #'
-#' Produces a grouped barplot comparing performance metrics (F1, AUC,
-#' Accuracy, Balanced Accuracy) across all models.
+#' Produces a grouped barplot comparing performance metrics across all models.
 #'
 #' @param final_models Named list of model results.
 #'
 #' @return A \code{ggplot} object.
-#'
-#' @examples
-#'   # Mock metrics
-#'   mock_met <- data.frame(
-#'     .metric = c("accuracy", "roc_auc"),
-#'     .estimate = c(0.85, 0.92)
-#'   )
-#'   mock_models <- list(RF = list(metrics = mock_met))
-#'
-#'   plotMetricsComparison(mock_models)
-#'
 #'
 #' @export
 plotMetricsComparison <- function(final_models) {
@@ -308,124 +268,174 @@ plotMetricsComparison <- function(final_models) {
 }
 
 
-#' Plot SHAP Distribution by Model
+#' Plot SHAP Beeswarm Plot
 #'
-#' Displays a jitter + boxplot showing the distribution of SHAP values
-#' for the top features, broken down by model.
+#' Displays a beeswarm plot showing the distribution of SHAP values
+#' for the top features, broken down by model type.
 #'
-#' @param shap_raw A data.frame of raw SHAP values from
-#'      \code{\link{computeFeatureImportance}}.
-#' @param top_features Character vector of feature names to display.
-#'      If \code{NULL}, the top \code{top_n} features are computed
-#'      automatically.
-#' @param top_n Integer. Number of top features to show if
-#'      \code{top_features} is \code{NULL} (default 15).
+#' @param shap_raw A data.frame of raw SHAP values.
+#' @param top_n Integer. Number of top features to show (default 20).
 #'
 #' @return A \code{ggplot} object.
 #'
-#' @examples
-#'   # Mock SHAP raw data
-#'   mock_shap <- data.frame(
-#'     variable = rep(c("Taxon_A", "Taxon_B"), each = 10),
-#'     contribution = rnorm(20),
-#'     model = rep(c("RF", "XGB"), 10)
-#'   )
-#'
-#'   plotShapDistribution(mock_shap, top_n = 2)
-#'
-#'
 #' @export
-plotShapDistribution <- function(shap_raw, top_features = NULL,
-                                 top_n = 15L) {
-  if (is.null(top_features)) {
-    top_features <- shap_raw %>%
-      dplyr::group_by(variable) %>%
-      dplyr::summarize(
-        mean_abs = mean(abs(contribution)),
-        .groups = "drop"
-      ) %>%
-      dplyr::arrange(dplyr::desc(mean_abs)) %>%
-      dplyr::slice_head(n = top_n) %>%
-      dplyr::pull(variable)
-  }
+plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
+  top_features <- shap_raw %>%
+    dplyr::group_by(variable) %>%
+    dplyr::summarize(mean_abs = mean(abs(contribution)), .groups = "drop") %>%
+    dplyr::arrange(dplyr::desc(mean_abs)) %>%
+    dplyr::slice_head(n = top_n) %>%
+    dplyr::pull(variable)
 
   shap_filtered <- shap_raw[shap_raw$variable %in% top_features, ]
+
+  # Define the exact direction (-1 for negative, 1 for positive) for the color gradient.
+  shap_filtered$Direction <- sign(shap_filtered$contribution)
 
   ggplot2::ggplot(
     shap_filtered,
     ggplot2::aes(
       y = reorder(variable, abs(contribution)),
-      x = contribution,
-      color = sign(contribution)
+      x = contribution
     )
   ) +
-    ggplot2::geom_jitter(
-      size = 1.5, alpha = 0.6,
-      ggplot2::aes(shape = model)
-    ) +
-    ggplot2::geom_boxplot(
-      alpha = 0.4, fill = "orange", color = "black",
-      outlier.alpha = 0
-    ) +
+    # Zero line
     ggplot2::geom_vline(
       xintercept = 0, linetype = "dashed",
-      color = "black", linewidth = 0.5
+      color = "gray50", linewidth = 0.5
+    ) +
+    # Background Boxplot
+    ggplot2::geom_boxplot(
+      width = 0.4,
+      outlier.shape = NA,
+      color = "black",
+      fill = "darkolivegreen3",
+      alpha = 0.6
+    ) +
+    # Beeswarm overlapping with shapes by model and color by direction.
+    ggbeeswarm::geom_quasirandom(
+      ggplot2::aes(shape = model, color = Direction),
+      groupOnX = FALSE,
+      size = 1.8,
+      alpha = 0.65,
+      width = 0.25
+    ) +
+    ggplot2::scale_color_gradient2(
+      low = "#1f77b4", mid = "gray", high = "#d62728",
+      midpoint = 0,
+      limits = c(-1, 1),
+      name = "Direction"
     ) +
     ggplot2::labs(
       y = "Feature", x = "SHAP Contribution",
       title = "SHAP Distribution by Model",
-      shape = "Model", color = "Direction"
+      shape = "Model"
     ) +
-    ggplot2::scale_color_gradient2(
-      low = "#d62728", mid = "gray", high = "#1f77b4",
-      midpoint = 0
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      panel.grid.major.y = ggplot2::element_line(color = "gray90", linetype = "dotted"),
+      panel.grid.minor = ggplot2::element_blank(),
+      legend.position = "right"
+    )
+}
+
+#' Plot Taxa Prevalence for Top SHAP Features
+#'
+#' Displays the prevalence of top SHAP features in the dataset.
+#'
+#' @param data The data.frame used for SHAP (test or train).
+#' @param global_importance Global importance data.frame.
+#' @param target_var Character. Name of the target variable.
+#' @param top_n Integer. Number of top features to show (default 20).
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @export
+plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L) {
+  # 1. Pega os top táxons e cria uma ordem fixa baseada na importância (mean_shap)
+  top_taxa_df <- head(global_importance, top_n)
+  top_taxa <- top_taxa_df$variable
+  taxa_order <- top_taxa_df$variable[order(top_taxa_df$mean_shap)]
+
+  X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
+  groups <- data[[target_var]]
+
+  # O "zero" (pseudocount) no CLR é sempre o mínimo daquela amostra (linha).
+  row_mins <- apply(X_data, 1, min)
+
+  prev_list <- lapply(levels(groups), function(lvl) {
+    idx <- which(groups == lvl)
+    subset_data <- X_data[idx, top_taxa, drop = FALSE]
+    subset_row_mins <- row_mins[idx]
+
+    # Compara cada linha com seu mínimo respectivo (tolerância 1e-6)
+    presence_matrix <- sweep(subset_data, 1, subset_row_mins + 1e-6, ">")
+
+    prev <- colMeans(presence_matrix)
+    data.frame(variable = names(prev), prevalence = prev, group = lvl)
+  })
+
+  df_prev <- dplyr::bind_rows(prev_list)
+
+  # 2. Trava a variável como um fator na ordem exata do SHAP
+  df_prev$variable <- factor(df_prev$variable, levels = taxa_order)
+
+  # 3. Força as cores para baterem com o SHAP: Azul (referência) e Vermelho (interesse)
+  class_colors <- stats::setNames(c("#1f77b4", "#d62728"), levels(groups))
+
+  ggplot2::ggplot(
+    df_prev,
+    # Removemos o reorder() e usamos diretamente a variável transformada em fator
+    ggplot2::aes(x = prevalence, y = variable, fill = group)
+  ) +
+    ggplot2::geom_col(position = "dodge") +
+    ggplot2::scale_fill_manual(values = class_colors) + # Aplica as cores manuais
+    ggplot2::labs(
+      title = "Prevalence of Top Biomarkers",
+      x = "Prevalence (Fraction of Samples)",
+      y = NULL,
+      fill = target_var
     ) +
+    ggplot2::scale_x_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
     ggplot2::theme_minimal(base_size = 12)
 }
 
 
-#' Plot Permutation Importance Barplot
+#' Plot Integrated Biomarker Interpretation
 #'
-#' Displays a grouped barplot of the top features ranked by
-#' permutation-based variable importance (delta loss), per model.
+#' Combines SHAP importance and prevalence information into a single figure.
 #'
-#' @param permutation_top A data.frame of top permutation features from
-#'      \code{\link{computeFeatureImportance}}.
+#' @param data The data.frame used for SHAP.
+#' @param global_importance Global importance data.frame.
+#' @param target_var Character. Name of the target variable.
+#' @param top_n Integer. Number of top features to show (default 20).
+#' @param class_of_interest Character.
+#' @param negative_class Character.
+#' @param metric_name Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").
 #'
-#' @return A \code{ggplot} object.
-#'
-#' @examples
-#'   # Mock data
-#'   mock_perm <- data.frame(
-#'     variable = rep(c("Taxon_A", "Taxon_B"), 2),
-#'     mean_dropout_loss = c(0.05, 0.02, 0.04, 0.01),
-#'     model = rep(c("RF", "XGB"), each = 2)
-#'   )
-#'
-#'   plotPermutationImportance(mock_perm)
-#'
+#' @return A \code{patchwork} object.
 #'
 #' @export
-plotPermutationImportance <- function(permutation_top) {
-  # Filter > 0 to match user logic, but ensure variable exists
-  df_plot <- permutation_top[permutation_top$mean_dropout_loss > 0, ]
+plotBiomarkerIntegrated <- function(data, global_importance, target_var,
+                                    top_n = 20L, class_of_interest, negative_class,
+                                    metric_name = "Spearman") {
 
-  ggplot2::ggplot(
-    df_plot,
-    ggplot2::aes(
-      y = reorder(variable, mean_dropout_loss),
-      x = mean_dropout_loss, fill = model
+  p1 <- plotShapGlobal(global_importance, target_var, class_of_interest, negative_class, top_n, metric_name) +
+    ggplot2::labs(title = paste0("SHAP Consensus (", metric_name, ")"), subtitle = NULL)
+
+  p2 <- plotTaxaPrevalence(data, global_importance, target_var, top_n) +
+    ggplot2::labs(title = "Group Prevalence", subtitle = NULL) +
+    ggplot2::theme(axis.text.y = ggplot2::element_blank())
+
+  # Combine using patchwork
+  combined <- p1 + p2 +
+    patchwork::plot_layout(widths = c(1, 0.8), guides = "collect") +
+    patchwork::plot_annotation(
+      title = "Integrated Biomarker Interpretation",
+      subtitle = paste0("Top ", top_n, " features by SHAP importance")
     )
-  ) +
-    ggplot2::geom_col(position = "dodge") +
-    ggplot2::labs(
-      y = "Feature",
-      x = "Importance (delta loss)",
-      title = "Permutation Importance by Model",
-      fill = "Model"
-    ) +
-    ggsci::scale_fill_nejm() +
-    ggplot2::theme_minimal(base_size = 12)
+
+  return(combined)
 }
 
 
@@ -434,20 +444,9 @@ plotPermutationImportance <- function(permutation_top) {
 #' Displays a heatmap of permutation-based variable importance for each
 #' feature across models.
 #'
-#' @param permutation_top A data.frame of top permutation features from
-#'      \code{\link{computeFeatureImportance}}.
+#' @param permutation_top A data.frame of top permutation features.
 #'
 #' @return A \code{ggplot} object.
-#'
-#' @examples
-#'   # Mock data
-#'   mock_perm <- data.frame(
-#'     variable = rep(c("Taxon_A", "Taxon_B"), 2),
-#'     mean_dropout_loss = c(0.05, 0.02, 0.04, 0.01),
-#'     model = rep(c("RF", "XGB"), each = 2)
-#'   )
-#'   plotPermutationHeatmap(mock_perm)
-#'
 #'
 #' @export
 plotPermutationHeatmap <- function(permutation_top) {
@@ -485,17 +484,6 @@ plotPermutationHeatmap <- function(permutation_top) {
 #'
 #' @return A data.frame with one row per model and one column per
 #'      metric.
-#'
-#' @examples
-#'   # Mock data
-#'   mock_met <- data.frame(
-#'     .metric = c("accuracy", "roc_auc"),
-#'     .estimate = c(0.85, 0.92)
-#'   )
-#'   mock_models <- list(RF = list(metrics = mock_met))
-#'
-#'   summariseMetrics(mock_models)
-#'
 #'
 #' @export
 summariseMetrics <- function(final_models) {

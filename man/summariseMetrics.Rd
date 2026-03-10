@@ -17,15 +17,3 @@ metric.
 Extracts and pivots performance metrics from all models into a
 single summary table.
 }
-\examples{
-  # Mock data
-  mock_met <- data.frame(
-    .metric = c("accuracy", "roc_auc"),
-    .estimate = c(0.85, 0.92)
-  )
-  mock_models <- list(RF = list(metrics = mock_met))
-
-  summariseMetrics(mock_models)
-
-
-}

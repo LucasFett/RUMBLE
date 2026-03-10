@@ -6,7 +6,7 @@
 \usage{
 computeFeatureImportance(
   explainers,
-  train_data,
+  data,
   target_var,
   top_n = 20L,
   repetitions = 10L,
@@ -16,8 +16,6 @@ computeFeatureImportance(
 }
 \arguments{
 \item{explainers}{List of DALEX explainers (output of \code{createExplainers}).}
-
-\item{train_data}{Training data.frame.}
 
 \item{target_var}{Name of the target variable.}
 
@@ -29,6 +27,8 @@ computeFeatureImportance(
 \item{n_cores}{Number of cores for parallel processing (default 1).}
 
 \item{verbose}{Logical. Whether to print progress messages.}
+
+\item{train_data}{Training data.frame.}
 
 \item{class_of_interest}{Character. The class of interest (must be the second
 factor level). SHAP values will be calculated with respect to this class.}

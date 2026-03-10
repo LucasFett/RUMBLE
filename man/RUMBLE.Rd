@@ -24,7 +24,8 @@ RUMBLE(
   min_abundance = 1e-04,
   remove_unclassified = FALSE,
   seed = 42L,
-  verbose = TRUE
+  verbose = TRUE,
+  shap_data = "test"
 )
 }
 \arguments{
