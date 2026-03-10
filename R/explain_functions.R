@@ -45,7 +45,7 @@
 #'   # Check class
 #'   class(explainers$RF)
 #'
-createExplainers <- function(final_models, train_data, target_var,
+createExplainers <- function(final_models, data, target_var,
                              class_of_interest) {
   message("Creating DALEX explainers...")
 
@@ -55,7 +55,7 @@ createExplainers <- function(final_models, train_data, target_var,
   }
 
   # Ensure class_of_interest is the second level (positive class for DALEX)
-  lvls <- levels(train_data[[target_var]])
+  lvls <- levels(data[[target_var]])
   if (lvls[2L] != class_of_interest) {
     stop("Expected '", class_of_interest, "' to be the second factor level, ",
          "but found '", lvls[2L], "'. Please ensure factor levels are reordered ",
@@ -66,11 +66,11 @@ createExplainers <- function(final_models, train_data, target_var,
 
   # Convert target to numeric 0/1 for DALEX
   y_numeric <- ifelse(
-    train_data[[target_var]] == positive_class, 1L, 0L
+    data[[target_var]] == positive_class, 1L, 0L
   )
 
   # Remove target from features
-  X <- train_data[, !colnames(train_data) %in% target_var, drop = FALSE]
+  X <- data[, !colnames(data) %in% target_var, drop = FALSE]
 
   purrr::imap(final_models, function(model_obj, model_name) {
     fitted_wf <- model_obj$model_fit
@@ -141,7 +141,7 @@ createExplainers <- function(final_models, train_data, target_var,
 #'   }
 #'
 computeFeatureImportance <- function(explainers,
-                                     train_data,
+                                     data,
                                      target_var,
                                      top_n = 20L,
                                      repetitions = 10L,
@@ -192,7 +192,7 @@ computeFeatureImportance <- function(explainers,
 
   # --- 2. SHAP VALUES ---
   # Remove target variable from training data for SHAP
-  X_train <- train_data[, !colnames(train_data) %in% target_var, drop = FALSE]
+  X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
 
   msg("Computing SHAP values for all observations (Global SHAP)...")
 
@@ -201,10 +201,10 @@ computeFeatureImportance <- function(explainers,
     msg(paste0("  -> Extracting SHAP for model: ", exp$label))
 
     # run_map (parallel if n_cores > 1) is now applied to the patients
-    run_map(seq_len(nrow(X_train)), function(i) {
+    run_map(seq_len(nrow(X_data)), function(i) {
 
       # Extract a single observation
-      single_obs <- X_train[i, , drop = FALSE]
+      single_obs <- X_data[i, , drop = FALSE]
 
       # Calculate local SHAP for this specific patient
       shap_val <- DALEX::predict_parts(
@@ -245,8 +245,9 @@ computeFeatureImportance <- function(explainers,
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()
 
-  ## Top SHAP
-  top_shap <- shap %>%
+  ## --- 3.1 Spearman Metric ---
+  ## Top SHAP (Spearman)
+  top_shap_spearman <- shap %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(
       mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
@@ -258,17 +259,41 @@ computeFeatureImportance <- function(explainers,
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()
 
-## Global consensus
-global_importance <- shap %>%
-  dplyr::group_by(variable) %>%
-  dplyr::summarise(
-    mean_shap = mean(abs(contribution), na.rm = TRUE),
-    # Aplicando a correlação que você desenvolveu ao dataframe global:
-    direction = sign(stats::cor(feature_value, contribution, method = "spearman")),
-    n_models  = dplyr::n_distinct(model),
-    .groups   = "drop"
-  ) %>%
-  dplyr::arrange(dplyr::desc(mean_shap))
+  ## Global consensus (Spearman)
+  global_importance_spearman <- shap %>%
+    dplyr::group_by(variable) %>%
+    dplyr::summarise(
+      mean_shap = mean(abs(contribution), na.rm = TRUE),
+      direction = sign(stats::cor(feature_value, contribution, method = "spearman")),
+      n_models  = dplyr::n_distinct(model),
+      .groups   = "drop"
+    ) %>%
+    dplyr::arrange(dplyr::desc(mean_shap))
+
+  ## --- 3.2 Mean SHAP Metric ---
+  ## Top SHAP (Mean SHAP)
+  top_shap_mean <- shap %>%
+    dplyr::group_by(model, variable) %>%
+    dplyr::summarize(
+      mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
+      direction = mean(sign(contribution), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::arrange(model, dplyr::desc(mean_abs_contribution)) %>%
+    dplyr::group_by(model) %>%
+    dplyr::slice_head(n = top_n) %>%
+    dplyr::ungroup()
+
+  ## Global consensus (Mean SHAP)
+  global_importance_mean <- shap %>%
+    dplyr::group_by(variable) %>%
+    dplyr::summarise(
+      mean_shap = mean(abs(contribution), na.rm = TRUE),
+      direction = mean(sign(contribution), na.rm = TRUE),
+      n_models  = dplyr::n_distinct(model),
+      .groups   = "drop"
+    ) %>%
+    dplyr::arrange(dplyr::desc(mean_shap))
 
   msg("Feature importance analysis complete.")
 
@@ -276,7 +301,13 @@ global_importance <- shap %>%
     permutation_raw = perm,
     permutation_top = top_perm,
     shap_raw = shap,
-    shap_top = top_shap,
-    global_importance = global_importance
+    shap_top = list(
+      spearman = top_shap_spearman,
+      mean_shap = top_shap_mean
+    ),
+    global_importance = list(
+      spearman = global_importance_spearman,
+      mean_shap = global_importance_mean
+    )
   )
 }

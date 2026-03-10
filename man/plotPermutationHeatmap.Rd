@@ -7,8 +7,7 @@
 plotPermutationHeatmap(permutation_top)
 }
 \arguments{
-\item{permutation_top}{A data.frame of top permutation features from
-\code{\link{computeFeatureImportance}}.}
+\item{permutation_top}{A data.frame of top permutation features.}
 }
 \value{
 A \code{ggplot} object.
@@ -16,15 +15,4 @@ A \code{ggplot} object.
 \description{
 Displays a heatmap of permutation-based variable importance for each
 feature across models.
-}
-\examples{
-  # Mock data
-  mock_perm <- data.frame(
-    variable = rep(c("Taxon_A", "Taxon_B"), 2),
-    mean_dropout_loss = c(0.05, 0.02, 0.04, 0.01),
-    model = rep(c("RF", "XGB"), each = 2)
-  )
-  plotPermutationHeatmap(mock_perm)
-
-
 }

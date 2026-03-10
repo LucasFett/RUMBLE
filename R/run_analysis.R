@@ -146,25 +146,26 @@
 #' @importFrom ggplot2 ggsave
 #' @export
 RUMBLE <- function(input,
-                        metadata = NULL,
-                        outcome_var,
-                        class_of_interest,
-                        tax_level = NULL,
-                        project_name = "RUMBLE_analysis",
-                        output_dir = NULL,
-                        n_cores = 1L,
-                        train_prop = 0.7,
-                        cv_folds = 5L,
-                        grid_size = 30L,
-                        top_n = 20L,
-                        shap_reps = 100L,
-                        xgb_trees = 1000L,
-                        rf_trees = 500L,
-                        min_prevalence = 0.05,
-                        min_abundance = 0.0001,
-                        remove_unclassified = FALSE,
-                        seed = 42L,
-                        verbose = TRUE) {
+                   metadata = NULL,
+                   outcome_var,
+                   class_of_interest,
+                   tax_level = NULL,
+                   project_name = "RUMBLE_analysis",
+                   output_dir = NULL,
+                   n_cores = 1L,
+                   train_prop = 0.7,
+                   cv_folds = 5L,
+                   grid_size = 30L,
+                   top_n = 20L,
+                   shap_reps = 100L,
+                   xgb_trees = 1000L,
+                   rf_trees = 500L,
+                   min_prevalence = 0.05,
+                   min_abundance = 0.0001,
+                   remove_unclassified = FALSE,
+                   seed = 42L,
+                   verbose = TRUE,
+                   shap_data = "test") {
 
   msg <- function(...) {
     if (verbose) message(...)
@@ -287,12 +288,24 @@ RUMBLE <- function(input,
   ## 5. Interpretability
   ## ==================================================================
   msg("[5/5] Computing feature importance...")
+
+  # Determine which data to use for SHAP
+  if (shap_data == "test") {
+    explainer_data <- test_data
+    msg("Using TEST set for SHAP interpretation (default)")
+  } else if (shap_data == "train") {
+    explainer_data <- train_data
+    msg("Using TRAIN set for SHAP interpretation")
+  } else {
+    stop("Invalid 'shap_data' parameter. Use 'test' or 'train'.")
+  }
+
   explainers <- createExplainers(
-    final_models, train_data, outcome_var,
+    final_models, explainer_data, outcome_var,
     class_of_interest = class_of_interest
   )
   importance <- computeFeatureImportance(
-    explainers, train_data, outcome_var,
+    explainers, explainer_data, outcome_var,
     top_n = top_n, repetitions = shap_reps,
     n_cores = n_cores, verbose = verbose
   )
@@ -305,17 +318,40 @@ RUMBLE <- function(input,
     metrics   = plotMetricsComparison(final_models),
     roc       = plotRocCurves(final_models, outcome_var),
     cm        = plotConfusionMatrices(final_models, outcome_var),
-    shap      = plotShapGlobal(
-      importance$global_importance, outcome_var,
+    shap_spearman = plotShapGlobal(
+      importance$global_importance$spearman, outcome_var,
       class_of_interest = class_of_interest,
       negative_class = negative_class,
-      top_n = top_n
+      top_n = top_n,
+      metric_name = "Spearman"
     ),
-    shap_dist = plotShapDistribution(
+    shap_mean = plotShapGlobal(
+      importance$global_importance$mean_shap, outcome_var,
+      class_of_interest = class_of_interest,
+      negative_class = negative_class,
+      top_n = top_n,
+      metric_name = "Mean SHAP"
+    ),
+    shap_beeswarm = plotShapBeeswarm(
       importance$shap_raw, top_n = top_n
     ),
-    perm      = plotPermutationImportance(
-      importance$permutation_top
+    shap_prevalence = plotTaxaPrevalence(
+      explainer_data, importance$global_importance$spearman,
+      target_var = outcome_var, top_n = top_n
+    ),
+    biomarker_integrated_spearman = plotBiomarkerIntegrated(
+      explainer_data, importance$global_importance$spearman,
+      target_var = outcome_var, top_n = top_n,
+      class_of_interest = class_of_interest,
+      negative_class = negative_class,
+      metric_name = "Spearman"
+    ),
+    biomarker_integrated_mean = plotBiomarkerIntegrated(
+      explainer_data, importance$global_importance$mean_shap,
+      target_var = outcome_var, top_n = top_n,
+      class_of_interest = class_of_interest,
+      negative_class = negative_class,
+      metric_name = "Mean SHAP"
     ),
     perm_heat = plotPermutationHeatmap(
       importance$permutation_top
@@ -336,17 +372,22 @@ RUMBLE <- function(input,
     msg("Saving outputs to: ", output_dir)
 
     ## Plots
-    plot_names <- c("metrics", "roc", "cm", "shap",
-                    "shap_dist", "perm", "perm_heat")
+    plot_names <- c("metrics", "roc", "cm", "shap_spearman", "shap_mean",
+                    "shap_beeswarm", "shap_prevalence",
+                    "biomarker_integrated_spearman", "biomarker_integrated_mean", "perm_heat")
+
     # Define sizes (width, height)
     plot_sizes <- list(
-      metrics   = c(8, 5),
-      roc       = c(8, 5),
-      cm        = c(10, 8),
-      shap      = c(9, 8),
-      shap_dist = c(10, 8),
-      perm      = c(9, 7),
-      perm_heat = c(9, 8)
+      metrics                       = c(8, 5),
+      roc                           = c(8, 5),
+      cm                            = c(10, 8),
+      shap_spearman                 = c(9, 8),
+      shap_mean                     = c(9, 8),
+      shap_beeswarm                 = c(10, 8),
+      shap_prevalence               = c(9, 8),
+      biomarker_integrated_spearman = c(12, 9),
+      biomarker_integrated_mean     = c(12, 9),
+      perm_heat                     = c(9, 8)
     )
 
     for (pname in plot_names) {
@@ -366,8 +407,12 @@ RUMBLE <- function(input,
       paste0(prefix, "_model_metrics.tsv")
     )
     readr::write_tsv(
-      importance$global_importance,
-      paste0(prefix, "_shap_global.tsv")
+      importance$global_importance$spearman,
+      paste0(prefix, "_shap_global_spearman.tsv")
+    )
+    readr::write_tsv(
+      importance$global_importance$mean_shap,
+      paste0(prefix, "_shap_global_mean_shap.tsv")
     )
     readr::write_tsv(
       importance$permutation_top,

@@ -4,15 +4,15 @@
 \alias{createExplainers}
 \title{Create DALEX Explainers for Trained Models}
 \usage{
-createExplainers(final_models, train_data, target_var, class_of_interest)
+createExplainers(final_models, data, target_var, class_of_interest)
 }
 \arguments{
 \item{final_models}{List of model results from the pipeline. Each element
 must contain a \code{model_fit} component (the fitted workflow).}
 
-\item{train_data}{Training data.frame (features + target).}
-
 \item{target_var}{Name of the target variable.}
+
+\item{train_data}{Training data.frame (features + target).}
 }
 \value{
 A list of DALEX explainer objects, one for each model.

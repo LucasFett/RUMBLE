@@ -9,7 +9,8 @@ plotShapGlobal(
   target_var,
   class_of_interest,
   negative_class,
-  top_n = 20L
+  top_n = 20L,
+  metric_name = "Spearman"
 )
 }
 \arguments{
@@ -19,13 +20,13 @@ plotShapGlobal(
 
 \item{target_var}{Character. Name of the target variable.}
 
-\item{class_of_interest}{Character. Label of the class of interest.
-Used for labeling the plot axes and legend.}
+\item{class_of_interest}{Character. Label of the class of interest.}
 
-\item{negative_class}{Character. Label of the negative/reference class.
-Used for labeling the plot axes and legend.}
+\item{negative_class}{Character. Label of the negative/reference class.}
 
 \item{top_n}{Integer. Number of top features to display (default 20).}
+
+\item{metric_name}{Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").}
 }
 \value{
 A \code{ggplot} object.
@@ -34,16 +35,4 @@ A \code{ggplot} object.
 Produces a directional barplot of the top features ranked by mean
 absolute SHAP value across all models. Color indicates the direction
 of the effect.
-}
-\examples{
-  # Mock data
-  mock_global <- data.frame(
-    variable = paste0("Taxon_", 1:5),
-    mean_shap = runif(5, 0.1, 0.5),
-    direction = sample(c(-1, 1), 5, replace = TRUE)
-  )
-
-  plotShapGlobal(mock_global, "Status", "Disease", "Control", top_n = 5)
-
-
 }
