@@ -8,6 +8,7 @@ computeFeatureImportance(
   explainers,
   data,
   target_var,
+  class_of_interest,
   top_n = 20L,
   repetitions = 10L,
   n_cores = 1L,
@@ -17,7 +18,12 @@ computeFeatureImportance(
 \arguments{
 \item{explainers}{List of DALEX explainers (output of \code{createExplainers}).}
 
+\item{data}{Data.frame for SHAP predictions (can be train or test).}
+
 \item{target_var}{Name of the target variable.}
+
+\item{class_of_interest}{Character. The class of interest (must be the second
+factor level). SHAP values will be calculated with respect to this class.}
 
 \item{top_n}{Number of top features to retain (default 20).}
 
@@ -27,11 +33,6 @@ computeFeatureImportance(
 \item{n_cores}{Number of cores for parallel processing (default 1).}
 
 \item{verbose}{Logical. Whether to print progress messages.}
-
-\item{train_data}{Training data.frame.}
-
-\item{class_of_interest}{Character. The class of interest (must be the second
-factor level). SHAP values will be calculated with respect to this class.}
 }
 \value{
 A named list containing:
@@ -53,8 +54,9 @@ Calculates SHAP values and permutation importance using parallel processing.
   if (exists("explainers") && exists("df")) {
     importance <- computeFeatureImportance(
       explainers = explainers,
-      train_data = df,
+      data = df,
       target_var = "Group",
+      class_of_interest = "B",
       top_n = 5,
       repetitions = 2,  # Low for speed
       n_cores = 1

@@ -450,20 +450,20 @@ plotBiomarkerIntegrated <- function(data, global_importance, target_var,
 #'
 #' @export
 plotPermutationHeatmap <- function(permutation_top) {
-  df_plot <- permutation_top[permutation_top$mean_dropout_loss > 0, ]
+  df_plot <- permutation_top[permutation_top$mean_delta_loss > 0, ]
 
   ggplot2::ggplot(
     df_plot,
     ggplot2::aes(
-      y = reorder(variable, mean_dropout_loss),
-      x = model, fill = mean_dropout_loss
+      y = reorder(variable, mean_delta_loss),
+      x = model, fill = mean_delta_loss
     )
   ) +
     ggplot2::geom_tile(color = "white", linewidth = 0.5) +
     ggplot2::labs(
       y = "Feature", x = "Model",
       fill = "Importance\n(delta loss)",
-      title = "Permutation Importance Heatmap"
+      title = "Permutation Importance Heatmap (Delta Loss)"
     ) +
     viridis::scale_fill_viridis(option = "H") +
     ggplot2::theme_minimal(base_size = 10) +

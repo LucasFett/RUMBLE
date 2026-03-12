@@ -96,7 +96,7 @@ createExplainers <- function(final_models, data, target_var,
 #' Calculates SHAP values and permutation importance using parallel processing.
 #'
 #' @param explainers List of DALEX explainers (output of \code{createExplainers}).
-#' @param train_data Training data.frame.
+#' @param data Data.frame for SHAP predictions (can be train or test).
 #' @param target_var Name of the target variable.
 #' @param class_of_interest Character. The class of interest (must be the second
 #'   factor level). SHAP values will be calculated with respect to this class.
@@ -130,8 +130,9 @@ createExplainers <- function(final_models, data, target_var,
 #'   if (exists("explainers") && exists("df")) {
 #'     importance <- computeFeatureImportance(
 #'       explainers = explainers,
-#'       train_data = df,
+#'       data = df,
 #'       target_var = "Group",
+#'       class_of_interest = "B",
 #'       top_n = 5,
 #'       repetitions = 2,  # Low for speed
 #'       n_cores = 1
@@ -143,6 +144,7 @@ createExplainers <- function(final_models, data, target_var,
 computeFeatureImportance <- function(explainers,
                                      data,
                                      target_var,
+                                     class_of_interest,
                                      top_n = 20L,
                                      repetitions = 10L,
                                      n_cores = 1L,
@@ -177,22 +179,38 @@ computeFeatureImportance <- function(explainers,
     }
   }
 
+  # --- PREPARE DATA FOR PERMUTATION AND SHAP ---
+  X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
+  y_numeric <- ifelse(data[[target_var]] == class_of_interest, 1L, 0L)
+
   # --- 1. PERMUTATION IMPORTANCE ---
   msg("Computing permutation importance...")
 
   perm <- run_map(explainers, function(exp) {
     parts <- DALEX::model_parts(
-      exp, type = "variable_importance", B = repetitions
+      exp,
+      data = X_data,
+      y = y_numeric,
+      type = "variable_importance",
+      B = repetitions
     )
-    # Filter out internal DALEX rows
-    parts <- parts[!parts$variable %in% c("_full_model_", "_baseline_"), ]
     parts$model <- exp$label
+
+    # 1. Calculates the base error WITHIN the loop, specific to this model.
+    fm_loss <- mean(parts$dropout_loss[parts$variable == "_full_model_"], na.rm = TRUE)
+
+    # 2. Create the Delta Loss column for all rows.
+    parts$delta_loss <- parts$dropout_loss - fm_loss
+
+    # 3. Remove the base error and the baseline
+    parts <- parts[!parts$variable %in% c("_full_model_", "_baseline_"), ]
+
     parts
   })
 
   # --- 2. SHAP VALUES ---
-  # Remove target variable from training data for SHAP
-  X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
+  # X_data already prepared above for permutation
+  # For SHAP, we use the same X_data
 
   msg("Computing SHAP values for all observations (Global SHAP)...")
 
@@ -237,10 +255,10 @@ computeFeatureImportance <- function(explainers,
   top_perm <- perm %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(
-      mean_dropout_loss = mean(dropout_loss, na.rm = TRUE),
+      mean_delta_loss = mean(delta_loss, na.rm = TRUE),
       .groups = "drop"
     ) %>%
-    dplyr::arrange(model, dplyr::desc(mean_dropout_loss)) %>%
+    dplyr::arrange(model, dplyr::desc(mean_delta_loss)) %>%
     dplyr::group_by(model) %>%
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()

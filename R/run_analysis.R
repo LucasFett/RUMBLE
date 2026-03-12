@@ -171,6 +171,10 @@ RUMBLE <- function(input,
     if (verbose) message(...)
   }
 
+  # Set global option for yardstick to use second level as event
+  old_opts <- options(yardstick.event_first = FALSE)
+  on.exit(options(old_opts), add = TRUE)
+
   ## ==================================================================
   ## 1. Data preparation
   ## ==================================================================
@@ -289,23 +293,26 @@ RUMBLE <- function(input,
   ## ==================================================================
   msg("[5/5] Computing feature importance...")
 
-  # Determine which data to use for SHAP
+  # Determine which data to use for SHAP predictions
   if (shap_data == "test") {
-    explainer_data <- test_data
+    prediction_data <- test_data
     msg("Using TEST set for SHAP interpretation (default)")
   } else if (shap_data == "train") {
-    explainer_data <- train_data
+    prediction_data <- train_data
     msg("Using TRAIN set for SHAP interpretation")
   } else {
     stop("Invalid 'shap_data' parameter. Use 'test' or 'train'.")
   }
 
+  # Explainer MUST always be created with train data
   explainers <- createExplainers(
-    final_models, explainer_data, outcome_var,
+    final_models, train_data, outcome_var,
     class_of_interest = class_of_interest
   )
+
   importance <- computeFeatureImportance(
-    explainers, explainer_data, outcome_var,
+    explainers, prediction_data, outcome_var,
+    class_of_interest = class_of_interest,
     top_n = top_n, repetitions = shap_reps,
     n_cores = n_cores, verbose = verbose
   )
@@ -336,18 +343,18 @@ RUMBLE <- function(input,
       importance$shap_raw, top_n = top_n
     ),
     shap_prevalence = plotTaxaPrevalence(
-      explainer_data, importance$global_importance$spearman,
+      prediction_data, importance$global_importance$spearman,
       target_var = outcome_var, top_n = top_n
     ),
     biomarker_integrated_spearman = plotBiomarkerIntegrated(
-      explainer_data, importance$global_importance$spearman,
+      prediction_data, importance$global_importance$spearman,
       target_var = outcome_var, top_n = top_n,
       class_of_interest = class_of_interest,
       negative_class = negative_class,
       metric_name = "Spearman"
     ),
     biomarker_integrated_mean = plotBiomarkerIntegrated(
-      explainer_data, importance$global_importance$mean_shap,
+      prediction_data, importance$global_importance$mean_shap,
       target_var = outcome_var, top_n = top_n,
       class_of_interest = class_of_interest,
       negative_class = negative_class,
