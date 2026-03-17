@@ -2,7 +2,7 @@
 #'
 #' Performs standard preprocessing for biomarker analysis: optional taxonomic
 #' aggregation, optional removal of unclassified taxa, prevalence filtering,
-#' NA imputation, and centered log-ratio (CLR) transformation.
+#' NA imputation, and centered log-ratio (CLR) or robust CLR (rCLR) transformation.
 #'
 #' @param input A \code{phyloseq} object OR a numeric matrix/data.frame
 #'   with samples as rows and taxa as columns.
@@ -21,11 +21,17 @@
 #' @param remove_unclassified Logical. If \code{TRUE}, removes taxa whose
 #'   names contain patterns such as \code{"uncultured"}, \code{"unknown"},
 #'   \code{"unclassified"}, or \code{"_"}. Default is \code{FALSE}.
+#' @param normalization_method Character. Method for compositional normalization.
+#'   Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
+#'   (Robust CLR). The rCLR method preserves the zero structure of the data
+#'   and is more robust to pseudocount artifacts, making it suitable for
+#'   tree-based algorithms that may overfit on pseudocount noise. Default is
+#'   \code{"clr"} to maintain compatibility with classical microbiome literature.
 #' @param verbose Logical. If \code{TRUE} (default), prints progress messages.
 #'
 #' @return A named list with four elements:
 #' \itemize{
-#'   \item \code{features}: A data.frame of CLR-transformed abundances (samples x taxa).
+#'   \item \code{features}: A data.frame of normalized abundances (samples x taxa).
 #'   \item \code{metadata}: A data.frame of sample metadata aligned with features.
 #'   \item \code{n_taxa_removed}: Integer. Total number of taxa removed.
 #'   \item \code{n_samples}: Integer. Number of samples in the final dataset.
@@ -40,7 +46,7 @@
 #'   \item Sanitise taxa names with \code{make.names()} for ML compatibility.
 #'   \item Impute \code{NA} values with zero.
 #'   \item Convert to relative abundance and filter by prevalence.
-#'   \item Apply CLR transformation with pseudocount.
+#'   \item Apply CLR or rCLR transformation.
 #' }
 #'
 #' @examples
@@ -52,8 +58,12 @@
 #'   if (file.exists(ps_path)) {
 #'     ps <- readRDS(ps_path)
 #'
-#'     # Run preprocessing
+#'     # Run preprocessing with default CLR
 #'     prep <- prepareData(ps, tax_level = "Genus", min_prevalence = 0.1)
+#'
+#'     # Or use robust CLR for tree-based models
+#'     prep_rclr <- prepareData(ps, tax_level = "Genus",
+#'                              normalization_method = "rclr")
 #'
 #'     # Check results
 #'     head(prep$features[, 1:5])
@@ -72,11 +82,19 @@ prepareData <- function(input,
                         min_abundance = 0.0001,
                         pseudocount = 1e-6,
                         remove_unclassified = FALSE,
+                        normalization_method = "clr",
                         verbose = TRUE) {
 
   msg <- function(...) {
     if (verbose) message(...)
   }
+
+  ## ------------------------------------------------------------------
+  ## Validate normalization_method
+  ## ------------------------------------------------------------------
+  normalization_method <- match.arg(normalization_method,
+                                    c("clr", "rclr"))
+  msg("Normalization method: ", normalization_method)
 
   ## ------------------------------------------------------------------
   ## 1. Normalise input to phyloseq
@@ -209,11 +227,38 @@ prepareData <- function(input,
   ps_filtered <- phyloseq::prune_taxa(keep_taxa, ps)
 
   ## ------------------------------------------------------------------
-  ## 7. CLR transformation
+  ## 7. Compositional normalization (CLR or rCLR)
   ## ------------------------------------------------------------------
-  ps_clr <- microbiome::transform(
-    ps_filtered, "clr", pseudocount = pseudocount
-  )
+  if (normalization_method == "clr") {
+    # Standard CLR transformation
+    ps_clr <- microbiome::transform(
+      ps_filtered, "clr", pseudocount = pseudocount
+    )
+    msg("Applied CLR transformation with pseudocount = ", pseudocount)
+
+  } else if (normalization_method == "rclr") {
+    # Robust CLR (rCLR): Preserves zero structure
+    otu_mat <- as(phyloseq::otu_table(ps_filtered), "matrix")
+    taxa_rows <- phyloseq::taxa_are_rows(ps_filtered)
+
+    if (taxa_rows) otu_mat <- t(otu_mat)
+
+    # Aplica a transformação especificando MARGIN = 1 (amostras como linhas)
+    otu_rclr <- vegan::decostand(otu_mat, method = "rclr", MARGIN = 1)
+
+    # (Mata qualquer ruído de ponto flutuante do R)
+    otu_rclr[otu_mat == 0] <- 0
+
+    rownames(otu_rclr) <- rownames(otu_mat)
+    colnames(otu_rclr) <- colnames(otu_mat)
+
+    if (taxa_rows) otu_rclr <- t(otu_rclr)
+
+    phyloseq::otu_table(ps_filtered) <- phyloseq::otu_table(otu_rclr, taxa_are_rows = taxa_rows)
+    ps_clr <- ps_filtered
+
+    msg("Applied rCLR (Robust CLR) transformation preserving zero structure (via vegan)")
+  }
 
   ## ------------------------------------------------------------------
   ## 8. Build output

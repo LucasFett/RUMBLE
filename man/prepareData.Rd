@@ -12,6 +12,7 @@ prepareData(
   min_abundance = 1e-04,
   pseudocount = 1e-06,
   remove_unclassified = FALSE,
+  normalization_method = "clr",
   verbose = TRUE
 )
 }
@@ -40,12 +41,19 @@ to handle zeros (default 1e-6).}
 names contain patterns such as \code{"uncultured"}, \code{"unknown"},
 \code{"unclassified"}, or \code{"_"}. Default is \code{FALSE}.}
 
+\item{normalization_method}{Character. Method for compositional normalization.
+Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
+(Robust CLR). The rCLR method preserves the zero structure of the data
+and is more robust to pseudocount artifacts, making it suitable for
+tree-based algorithms that may overfit on pseudocount noise. Default is
+\code{"clr"} to maintain compatibility with classical microbiome literature.}
+
 \item{verbose}{Logical. If \code{TRUE} (default), prints progress messages.}
 }
 \value{
 A named list with four elements:
 \itemize{
-\item \code{features}: A data.frame of CLR-transformed abundances (samples x taxa).
+\item \code{features}: A data.frame of normalized abundances (samples x taxa).
 \item \code{metadata}: A data.frame of sample metadata aligned with features.
 \item \code{n_taxa_removed}: Integer. Total number of taxa removed.
 \item \code{n_samples}: Integer. Number of samples in the final dataset.
@@ -54,7 +62,7 @@ A named list with four elements:
 \description{
 Performs standard preprocessing for biomarker analysis: optional taxonomic
 aggregation, optional removal of unclassified taxa, prevalence filtering,
-NA imputation, and centered log-ratio (CLR) transformation.
+NA imputation, and centered log-ratio (CLR) or robust CLR (rCLR) transformation.
 }
 \details{
 The preprocessing pipeline follows these steps:
@@ -65,7 +73,7 @@ The preprocessing pipeline follows these steps:
 \item Sanitise taxa names with \code{make.names()} for ML compatibility.
 \item Impute \code{NA} values with zero.
 \item Convert to relative abundance and filter by prevalence.
-\item Apply CLR transformation with pseudocount.
+\item Apply CLR or rCLR transformation.
 }
 }
 \examples{
@@ -77,8 +85,12 @@ The preprocessing pipeline follows these steps:
   if (file.exists(ps_path)) {
     ps <- readRDS(ps_path)
 
-    # Run preprocessing
+    # Run preprocessing with default CLR
     prep <- prepareData(ps, tax_level = "Genus", min_prevalence = 0.1)
+
+    # Or use robust CLR for tree-based models
+    prep_rclr <- prepareData(ps, tax_level = "Genus",
+                             normalization_method = "rclr")
 
     # Check results
     head(prep$features[, 1:5])

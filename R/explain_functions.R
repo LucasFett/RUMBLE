@@ -94,6 +94,7 @@ createExplainers <- function(final_models, data, target_var,
 #' Compute Feature Importance via SHAP and Permutation (Parallelized)
 #'
 #' Calculates SHAP values and permutation importance using parallel processing.
+#' Supports both exact SHAP (via DALEX) and fast approximation (via fastshap).
 #'
 #' @param explainers List of DALEX explainers (output of \code{createExplainers}).
 #' @param data Data.frame for SHAP predictions (can be train or test).
@@ -104,6 +105,10 @@ createExplainers <- function(final_models, data, target_var,
 #' @param repetitions Number of repetitions (B) for importance calculation
 #'   (default 10).
 #' @param n_cores Number of cores for parallel processing (default 1).
+#' @param shap_method Character. Method for SHAP calculation. Options are
+#'   \code{"exact"} (default, uses DALEX for rigorous SHAP values) or
+#'   \code{"fast"} (uses fastshap package for faster approximation).
+#'   The exact method is recommended for publication-quality results.
 #' @param verbose Logical. Whether to print progress messages.
 #'
 #' @return A named list containing:
@@ -117,10 +122,12 @@ createExplainers <- function(final_models, data, target_var,
 #'
 #' @importFrom DALEX model_parts predict_parts
 #' @importFrom dplyr group_by summarize arrange slice_head ungroup desc
-#'      n_distinct bind_rows
+#'      n_distinct bind_rows mutate
 #' @importFrom furrr future_map_dfr furrr_options
 #' @importFrom future plan multisession sequential
-#' @importFrom purrr map_dfr
+#' @importFrom purrr map_dfr imap
+#' @importFrom tidyr pivot_longer
+#' @importFrom stats cor
 #' @export
 #'
 #' @examples
@@ -135,7 +142,8 @@ createExplainers <- function(final_models, data, target_var,
 #'       class_of_interest = "B",
 #'       top_n = 5,
 #'       repetitions = 2,  # Low for speed
-#'       n_cores = 1
+#'       n_cores = 1,
+#'       shap_method = "exact"
 #'     )
 #'
 #'     head(importance$global_importance)
@@ -148,17 +156,22 @@ computeFeatureImportance <- function(explainers,
                                      top_n = 20L,
                                      repetitions = 10L,
                                      n_cores = 1L,
+                                     shap_method = "exact",
                                      verbose = TRUE) {
 
   msg <- function(...) {
     if (verbose) message(...)
   }
 
+  ## Validate shap_method
+  shap_method <- match.arg(shap_method, c("exact", "fast"))
+
   msg("------------------------------------------------------")
   msg("Feature importance analysis (RUMBLE)")
   msg("Models: ", length(explainers),
       " | Top N: ", top_n,
-      " | Repetitions: ", repetitions)
+      " | Repetitions: ", repetitions,
+      " | SHAP method: ", shap_method)
   msg("------------------------------------------------------")
 
   # --- PARALLEL SETUP ---
@@ -194,17 +207,8 @@ computeFeatureImportance <- function(explainers,
       type = "variable_importance",
       B = repetitions
     )
+    # DO NOT filter out _full_model_ yet, we need it to calculate Delta loss
     parts$model <- exp$label
-
-    # 1. Calculates the base error WITHIN the loop, specific to this model.
-    fm_loss <- mean(parts$dropout_loss[parts$variable == "_full_model_"], na.rm = TRUE)
-
-    # 2. Create the Delta Loss column for all rows.
-    parts$delta_loss <- parts$dropout_loss - fm_loss
-
-    # 3. Remove the base error and the baseline
-    parts <- parts[!parts$variable %in% c("_full_model_", "_baseline_"), ]
-
     parts
   })
 
@@ -212,37 +216,96 @@ computeFeatureImportance <- function(explainers,
   # X_data already prepared above for permutation
   # For SHAP, we use the same X_data
 
-  msg("Computing SHAP values for all observations (Global SHAP)...")
+  if (shap_method == "exact") {
+    msg("Computing SHAP values for all observations (Global SHAP - EXACT method)...")
 
-  # WE INVERT THE LOOP: Sequential over models, Parallel over patients!
-  shap <- purrr::map_dfr(explainers, function(exp) {
-    msg(paste0("  -> Extracting SHAP for model: ", exp$label))
+    # WE INVERT THE LOOP: Sequential over models, Parallel over patients!
+    shap <- purrr::map_dfr(explainers, function(exp) {
+      msg(paste0("  -> Extracting SHAP for model: ", exp$label))
 
-    # run_map (parallel if n_cores > 1) is now applied to the patients
-    run_map(seq_len(nrow(X_data)), function(i) {
+      # run_map (parallel if n_cores > 1) is now applied to the patients
+      run_map(seq_len(nrow(X_data)), function(i) {
 
-      # Extract a single observation
-      single_obs <- X_data[i, , drop = FALSE]
+        # Extract a single observation
+        single_obs <- X_data[i, , drop = FALSE]
 
-      # Calculate local SHAP for this specific patient
-      shap_val <- DALEX::predict_parts(
-        exp,
-        new_observation = single_obs,
-        type = "shap",
-        B = repetitions
+        # Calculate local SHAP for this specific patient
+        shap_val <- DALEX::predict_parts(
+          exp,
+          new_observation = single_obs,
+          type = "shap",
+          B = repetitions
+        )
+
+        # Add necessary metadata for RUMBLE
+        shap_val$model <- exp$label
+        shap_val$feature_value <- as.numeric(sub(".*= ", "", as.character(shap_val$variable)))
+        shap_val$observation_id <- i # Patient traceability
+
+        return(shap_val)
+      })
+    })
+
+    # Clean the variable name by removing the value part (e.g., "Taxon_A = 2.5" becomes "Taxon_A")
+    shap$variable <- sub(" =.*", "", as.character(shap$variable))
+
+  } else if (shap_method == "fast") {
+    # Fast SHAP using fastshap package (approximation)
+    msg("Computing SHAP values using FAST approximation method...")
+
+    # Check if fastshap is installed
+    if (!requireNamespace("fastshap", quietly = TRUE)) {
+      stop("The 'fastshap' package is required for shap_method='fast'. ",
+           "Install it with: install.packages('fastshap')")
+    }
+
+    shap <- purrr::map_dfr(explainers, function(exp) {
+      msg(paste0("  -> Computing fast SHAP for model: ", exp$label))
+
+      # Extract model and data
+      fitted_model <- exp$model
+      X_pred <- X_data
+
+      # Define prediction function for fastshap
+      pred_fn <- function(object, newdata) {
+        stats::predict(object, newdata, type = "prob")[[paste0(".pred_", class_of_interest)]]
+      }
+
+      # Compute SHAP values using fastshap
+      shap_vals <- fastshap::explain(
+        object = fitted_model,
+        X = X_pred,
+        pred_wrapper = pred_fn,
+        nsim = repetitions
       )
 
-      # Add necessary metadata for RUMBLE
-      shap_val$model <- exp$label
-      shap_val$feature_value <- as.numeric(sub(".*= ", "", as.character(shap_val$variable)))
-      shap_val$observation_id <- i # Patient traceability
+      # Convert to RUMBLE format
+      shap_long <- tidyr::pivot_longer(
+        data.frame(observation_id = seq_len(nrow(shap_vals)), shap_vals),
+        cols = -observation_id,
+        names_to = "variable",
+        values_to = "contribution"
+      )
 
-      return(shap_val)
+      # PERFORMANCE OPTIMIZATION: Use vectorized join instead of row-by-row loop
+      # Pivot original data to long format for efficient joining
+      X_long <- X_pred %>%
+        dplyr::mutate(observation_id = dplyr::row_number()) %>%
+        tidyr::pivot_longer(
+          cols = -observation_id,
+          names_to = "variable",
+          values_to = "feature_value"
+        )
+
+      # Join with SHAP values (vectorized operation in C++ backend)
+      shap_long <- shap_long %>%
+        dplyr::left_join(X_long, by = c("observation_id", "variable")) %>%
+        dplyr::mutate(model = exp$label)
+
+      return(shap_long)
     })
-  })
+  }
 
-  # Clean the variable name by removing the value part (e.g., "Taxon_A = 2.5" becomes "Taxon_A")
-  shap$variable <- sub(" =.*", "", as.character(shap$variable))
   # --- CLEANUP ---
   if (n_cores > 1) {
     future::plan(future::sequential)
@@ -253,6 +316,21 @@ computeFeatureImportance <- function(explainers,
 
   ## Top permutation
   top_perm <- perm %>%
+    dplyr::group_by(model) %>%
+    dplyr::mutate(
+      # Calculate full model loss for each model
+      full_model_loss = mean(
+        dropout_loss[variable == "_full_model_"],
+        na.rm = TRUE
+      )
+    ) %>%
+    dplyr::ungroup() %>%
+    # Remove internal DALEX rows AFTER calculating full_model_loss
+    dplyr::filter(!variable %in% c("_full_model_", "_baseline_")) %>%
+    dplyr::mutate(
+      # Calculate Delta loss (relative importance)
+      delta_loss = dropout_loss - full_model_loss
+    ) %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(
       mean_delta_loss = mean(delta_loss, na.rm = TRUE),

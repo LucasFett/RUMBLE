@@ -360,16 +360,26 @@ plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L)
   X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
   groups <- data[[target_var]]
 
-  # O "zero" (pseudocount) no CLR é sempre o mínimo daquela amostra (linha).
-  row_mins <- apply(X_data, 1, min)
+  # CRITICAL FIX: Detect if data is rCLR (has exact zeros) or CLR (no exact zeros)
+  # rCLR preserves true zeros as exactly 0, while CLR transforms all values
+  # Tolerância para resíduos de ponto flutuante
+  has_exact_zeros <- (sum(abs(X_data) < 1e-12) / length(X_data)) > 0.05
 
   prev_list <- lapply(levels(groups), function(lvl) {
     idx <- which(groups == lvl)
-    subset_data <- X_data[idx, top_taxa, drop = FALSE]
-    subset_row_mins <- row_mins[idx]
+    # Pega TODAS as bactérias da amostra (necessário para a lógica de CLR)
+    X_group <- X_data[idx, , drop = FALSE]
+    # Pega apenas as bactérias de interesse para plotar
+    subset_data <- X_group[, top_taxa, drop = FALSE]
 
-    # Compara cada linha com seu mínimo respectivo (tolerância 1e-6)
-    presence_matrix <- sweep(subset_data, 1, subset_row_mins + 1e-6, ">")
+    if (has_exact_zeros) {
+      # Logic for rCLR: Valores minúsculos são verdadeiras ausências
+      presence_matrix <- abs(subset_data) > 1e-12
+    } else {
+      # CRITICAL FIX: O "zero" verdadeiro é a abundância mínima da linha INTEIRA,
+      full_row_mins <- apply(X_group, 1, min)
+      presence_matrix <- sweep(subset_data, 1, full_row_mins + 1e-6, ">")
+    }
 
     prev <- colMeans(presence_matrix)
     data.frame(variable = names(prev), prevalence = prev, group = lvl)

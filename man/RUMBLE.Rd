@@ -23,9 +23,12 @@ RUMBLE(
   min_prevalence = 0.05,
   min_abundance = 1e-04,
   remove_unclassified = FALSE,
+  normalization_method = "clr",
   seed = 42L,
   verbose = TRUE,
-  shap_data = "test"
+  shap_data = "test",
+  shap_method = "exact",
+  metric_cutoffs = NULL
 )
 }
 \arguments{
@@ -114,9 +117,30 @@ consider a taxon present (default 0.0001).}
 names matching common unclassified patterns (default
 \code{FALSE}).}
 
+\item{normalization_method}{Character. Method for compositional normalization.
+Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
+(Robust CLR). The rCLR method preserves the zero structure of the data
+and is more robust to pseudocount artifacts, making it suitable for
+tree-based algorithms. Default is \code{"clr"} to maintain compatibility
+with classical microbiome literature.}
+
 \item{seed}{Integer. Random seed for reproducibility (default 42).}
 
 \item{verbose}{Logical. Whether to print progress messages (default TRUE).}
+
+\item{shap_method}{Character. Method for SHAP calculation. Options are
+\code{"exact"} (default, uses DALEX for rigorous SHAP values) or
+\code{"fast"} (uses fastshap package for faster approximation).
+The exact method is recommended for publication-quality results.
+The fast method provides a good approximation with significantly
+reduced computation time, suitable for exploratory analysis.}
+
+\item{metric_cutoffs}{Named numeric vector. Optional quality filter for models
+based on performance metrics. Models failing to meet the specified thresholds
+are excluded from the SHAP analysis. Example:
+\code{metric_cutoffs = c("roc_auc" = 0.75, "f_meas" = 0.60)}.
+Default is \code{NULL} (no filtering). This parameter ensures that only
+high-quality models contribute to the consensus biomarker ranking.}
 }
 \value{
 A named list with five elements:

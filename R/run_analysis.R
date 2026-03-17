@@ -58,6 +58,12 @@
 #'   may vary by ±20%). For critical studies or meta-analyses, consider 1000
 #'   repetitions (feature rankings stable to ±1%).
 #'   \strong{Note:} This parameter significantly affects computation time.
+#' @param shap_method Character. Method for SHAP calculation. Options are
+#'   \code{"exact"} (default, uses DALEX for rigorous SHAP values) or
+#'   \code{"fast"} (uses fastshap package for faster approximation).
+#'   The exact method is recommended for publication-quality results.
+#'   The fast method provides a good approximation with significantly
+#'   reduced computation time, suitable for exploratory analysis.
 #' @param xgb_trees Integer. Number of trees for the XGBoost model
 #'   (default 1000). XGBoost is sensitive to the number of boosting iterations.
 #'   The default value (1000) is recommended for publication-quality results.
@@ -79,8 +85,20 @@
 #' @param remove_unclassified Logical. Whether to remove taxa with
 #'   names matching common unclassified patterns (default
 #'   \code{FALSE}).
+#' @param normalization_method Character. Method for compositional normalization.
+#'   Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
+#'   (Robust CLR). The rCLR method preserves the zero structure of the data
+#'   and is more robust to pseudocount artifacts, making it suitable for
+#'   tree-based algorithms. Default is \code{"clr"} to maintain compatibility
+#'   with classical microbiome literature.
 #' @param seed Integer. Random seed for reproducibility (default 42).
 #' @param verbose Logical. Whether to print progress messages (default TRUE).
+#' @param metric_cutoffs Named numeric vector. Optional quality filter for models
+#'   based on performance metrics. Models failing to meet the specified thresholds
+#'   are excluded from the SHAP analysis. Example:
+#'   \code{metric_cutoffs = c("roc_auc" = 0.75, "f_meas" = 0.60)}.
+#'   Default is \code{NULL} (no filtering). This parameter ensures that only
+#'   high-quality models contribute to the consensus biomarker ranking.
 #'
 #' @return A named list with five elements:
 #'   \itemize{
@@ -163,9 +181,12 @@ RUMBLE <- function(input,
                    min_prevalence = 0.05,
                    min_abundance = 0.0001,
                    remove_unclassified = FALSE,
+                   normalization_method = "clr",
                    seed = 42L,
                    verbose = TRUE,
-                   shap_data = "test") {
+                   shap_data = "test",
+                   shap_method = "exact",
+                   metric_cutoffs = NULL) {
 
   msg <- function(...) {
     if (verbose) message(...)
@@ -190,6 +211,7 @@ RUMBLE <- function(input,
     min_prevalence = min_prevalence,
     min_abundance = min_abundance,
     remove_unclassified = remove_unclassified,
+    normalization_method = normalization_method,
     verbose = verbose
   )
 
@@ -289,6 +311,66 @@ RUMBLE <- function(input,
   )
 
   ## ==================================================================
+  ## 4.5 Apply metric cutoffs (optional quality filter)
+  ## ==================================================================
+
+  # Por padrão, todos os modelos vão para a explicabilidade
+  explainable_models <- final_models
+
+  if (!is.null(metric_cutoffs)) {
+    msg("Applying metric cutoffs for model selection...")
+    msg("Cutoff thresholds: ", paste(names(metric_cutoffs), "=", metric_cutoffs, collapse = ", "))
+
+    # Build a summary of metrics for filtering
+    metrics_for_filter <- purrr::imap_dfr(final_models, function(obj, name) {
+      obj$metrics %>%
+        dplyr::select(.metric, .estimate) %>%
+        tidyr::pivot_wider(names_from = .metric, values_from = .estimate) %>%
+        dplyr::mutate(model = name)
+    })
+
+    # Check which models pass all cutoffs
+    models_to_keep <- character(0)
+    for (model_name in names(final_models)) {
+      model_metrics <- metrics_for_filter[metrics_for_filter$model == model_name, ]
+
+      passes_all_cutoffs <- TRUE
+      for (metric_name in names(metric_cutoffs)) {
+        if (metric_name %in% colnames(model_metrics)) {
+          metric_value <- model_metrics[[metric_name]]
+          cutoff_value <- metric_cutoffs[[metric_name]]
+
+          if (is.na(metric_value) || metric_value < cutoff_value) {
+            msg("  Model '", model_name, "' failed cutoff for ", metric_name,
+                ": ", round(metric_value, 3), " < ", cutoff_value)
+            passes_all_cutoffs <- FALSE
+            break
+          }
+        } else {
+          warning("Metric '", metric_name, "' not found in model results. Skipping this cutoff.")
+        }
+      }
+
+      if (passes_all_cutoffs) {
+        models_to_keep <- c(models_to_keep, model_name)
+        msg("  Model '", model_name, "' passed all cutoffs")
+      }
+    }
+
+    # Filter explainable_models (mantendo final_models intacto)
+    n_models_before <- length(final_models)
+    explainable_models <- final_models[models_to_keep]
+    n_models_after <- length(explainable_models)
+
+    if (n_models_after == 0) {
+      stop("All models were filtered out by metric_cutoffs. ",
+           "Consider relaxing the thresholds.")
+    }
+
+    msg("Models retained after filtering (for SHAP): ", n_models_after, " out of ", n_models_before)
+  }
+
+  ## ==================================================================
   ## 5. Interpretability
   ## ==================================================================
   msg("[5/5] Computing feature importance...")
@@ -305,8 +387,9 @@ RUMBLE <- function(input,
   }
 
   # Explainer MUST always be created with train data
+  # Utilizando a lista explainable_models filtrada
   explainers <- createExplainers(
-    final_models, train_data, outcome_var,
+    explainable_models, train_data, outcome_var,
     class_of_interest = class_of_interest
   )
 
@@ -314,7 +397,8 @@ RUMBLE <- function(input,
     explainers, prediction_data, outcome_var,
     class_of_interest = class_of_interest,
     top_n = top_n, repetitions = shap_reps,
-    n_cores = n_cores, verbose = verbose
+    n_cores = n_cores, shap_method = shap_method,
+    verbose = verbose
   )
 
   ## ==================================================================

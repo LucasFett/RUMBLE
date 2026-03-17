@@ -30,6 +30,7 @@ Imports:
     DALEX,
     doParallel,
     dplyr,
+    fastshap,
     furrr,
     future,
     ggbeeswarm,

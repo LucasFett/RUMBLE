@@ -12,6 +12,7 @@ computeFeatureImportance(
   top_n = 20L,
   repetitions = 10L,
   n_cores = 1L,
+  shap_method = "exact",
   verbose = TRUE
 )
 }
@@ -32,6 +33,11 @@ factor level). SHAP values will be calculated with respect to this class.}
 
 \item{n_cores}{Number of cores for parallel processing (default 1).}
 
+\item{shap_method}{Character. Method for SHAP calculation. Options are
+\code{"exact"} (default, uses DALEX for rigorous SHAP values) or
+\code{"fast"} (uses fastshap package for faster approximation).
+The exact method is recommended for publication-quality results.}
+
 \item{verbose}{Logical. Whether to print progress messages.}
 }
 \value{
@@ -46,6 +52,7 @@ A named list containing:
 }
 \description{
 Calculates SHAP values and permutation importance using parallel processing.
+Supports both exact SHAP (via DALEX) and fast approximation (via fastshap).
 }
 \examples{
   # ... (Assume 'explainers' and 'df' created as in createExplainers example)
@@ -59,7 +66,8 @@ Calculates SHAP values and permutation importance using parallel processing.
       class_of_interest = "B",
       top_n = 5,
       repetitions = 2,  # Low for speed
-      n_cores = 1
+      n_cores = 1,
+      shap_method = "exact"
     )
 
     head(importance$global_importance)

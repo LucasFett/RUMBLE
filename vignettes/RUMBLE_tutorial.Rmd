@@ -322,7 +322,681 @@ print(results_mat$plots$biomarker_integrated_mean)
 print(results_mat$plots$shap_beeswarm)
 ```
 Other plots are available in `results_mat$plots` but are omitted here for brevity.
+# Part 3: Robust Analysis with rCLR Normalization
 
+In traditional microbiome analysis, the Centered Log-Ratio (CLR) transformation relies on adding a pseudocount to handle zero values (taxa absence). However, for tree-based machine learning algorithms such as Random Forest and XGBoost, these uniform pseudocounts can introduce artificial noise and lead to overfitting.
+
+To address this, RUMBLE implements the **Robust CLR (rCLR)** via the `normalization_method` parameter. This approach computes the transformation strictly on non-zero values, preserving the true zero structure of the sparse matrix.
+
+## Scenario C: rCLR Evaluation on Test Data
+
+We run the pipeline applying the **rCLR transformation** and evaluating the SHAP consensus on the hold-out **test set**.
+
+```{r run_rclr_test, results='hide'}
+set.seed(42)
+
+results_rclr_test <- RUMBLE(
+  input                = ps,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = "Genus",
+  project_name         = "rCLR_Test_Analysis",
+  output_dir           = tempdir(),
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "test",
+  normalization_method = "rclr"
+)
+```
+
+# Results (rCLR on Test Data)
+
+## Metrics Table
+
+```{r rclr_metrics_test}
+knitr::kable(
+  results_rclr_test$metrics,
+  digits = 3,
+  caption = "Model performance metrics (rCLR, Test Set)."
+)
+```
+
+## 1. Metrics Comparison
+
+```{r rclr_metrics_plot_test}
+print(results_rclr_test$plots$metrics)
+```
+
+## 2. ROC Curves
+
+```{r rclr_roc_test}
+print(results_rclr_test$plots$roc)
+```
+
+## 3. Confusion Matrices
+
+```{r rclr_cm_test}
+print(results_rclr_test$plots$cm)
+```
+
+## 4. SHAP Consensus (Spearman & Mean SHAP)
+
+```{r rclr_shap_spearman_test}
+print(results_rclr_test$plots$shap_spearman)
+```
+
+```{r rclr_shap_mean_test}
+print(results_rclr_test$plots$shap_mean)
+```
+
+## 5. SHAP Distribution (Beeswarm)
+
+```{r rclr_beeswarm_test}
+print(results_rclr_test$plots$shap_beeswarm)
+```
+
+## 6. Taxa Prevalence
+
+Because **rCLR preserves true zeros**, the prevalence calculation correctly identifies strictly non-zero abundance as presence.
+
+```{r rclr_prevalence_test}
+print(results_rclr_test$plots$shap_prevalence)
+```
+
+## 7. Integrated Biomarker Interpretation
+
+```{r rclr_biomarker_mean_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_rclr_test$plots$biomarker_integrated_mean)
+```
+
+```{r rclr_biomarker_spearman_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_rclr_test$plots$biomarker_integrated_spearman)
+```
+
+## 8. Permutation Importance (Heatmap)
+
+```{r rclr_perm_heat_test}
+print(results_rclr_test$plots$perm_heat)
+```
+
+# Scenario D: rCLR Interpretability on Training Data
+
+Finally, we apply the **rCLR transformation** but explicitly extract our interpretability insights from the **training set** to evaluate internal model dynamics.
+
+```{r run_rclr_train}
+set.seed(42)
+
+results_rclr_train <- RUMBLE(
+  input                = otu_mat,
+  metadata             = meta_df,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = NULL,
+  project_name         = "rCLR_Train_Analysis",
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "train",
+  normalization_method = "rclr"
+)
+```
+
+# Results (rCLR on Training Data)
+
+```{r rclr_metrics_train}
+knitr::kable(
+  results_rclr_train$metrics,
+  digits = 3,
+  caption = "Model performance metrics (rCLR, Matrix Input)."
+)
+```
+
+```{r rclr_roc_train}
+print(results_rclr_train$plots$roc)
+```
+
+# Interpretability on Training Data (rCLR)
+
+```{r rclr_shap_spearman_train}
+print(results_rclr_train$plots$shap_spearman)
+```
+
+```{r rclr_shap_mean_train}
+print(results_rclr_train$plots$shap_mean)
+```
+
+```{r rclr_biomarker_spearman_train, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_rclr_train$plots$biomarker_integrated_spearman)
+```
+
+```{r rclr_biomarker_mean_train, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_rclr_train$plots$biomarker_integrated_mean)
+```
+
+```{r rclr_beeswarm_train}
+print(results_rclr_train$plots$shap_beeswarm)
+```
+
+# Part 4: Accelerated Interpretability with Fast SHAP
+
+Calculating exact SHAP values via the `DALEX` explainer can be computationally expensive, especially when increasing the number of repetitions (`shap_reps`) or evaluating large datasets. To facilitate rapid prototyping and exploratory analysis, RUMBLE integrates the `fastshap` package.
+
+By setting `shap_method = "fast"`, the pipeline uses an efficient C++ backend algorithm to approximate SHAP values in a fraction of the time, while maintaining the same standard CLR normalization for direct comparison with our initial exact results.
+
+## Scenario E: Fast SHAP on Test Data (CLR)
+
+In this run, we evaluate the **test set** using standard CLR but routing the interpretability module through the fast approximation method.
+
+```{r run_fastshap_test, results='hide'}
+set.seed(42)
+
+results_fastshap_test <- RUMBLE(
+  input                = ps,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = "Genus",
+  project_name         = "FastSHAP_Test_Analysis",
+  output_dir           = tempdir(),
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "test",
+  normalization_method = "clr",
+  shap_method          = "fast"
+)
+```
+
+# Results (Fast SHAP on Test Data)
+
+## Metrics Table
+
+```{r fastshap_metrics_test}
+knitr::kable(
+  results_fastshap_test$metrics,
+  digits = 3,
+  caption = "Model performance metrics (CLR, Fast SHAP, Test Set)."
+)
+```
+
+## 1. Metrics Comparison
+
+```{r fastshap_metrics_plot_test}
+print(results_fastshap_test$plots$metrics)
+```
+
+## 2. ROC Curves
+
+```{r fastshap_roc_test}
+print(results_fastshap_test$plots$roc)
+```
+
+## 3. Confusion Matrices
+
+```{r fastshap_cm_test}
+print(results_fastshap_test$plots$cm)
+```
+
+## 4. Fast SHAP Consensus (Spearman & Mean SHAP)
+
+```{r fastshap_spearman_test}
+print(results_fastshap_test$plots$shap_spearman)
+```
+
+```{r fastshap_mean_test}
+print(results_fastshap_test$plots$shap_mean)
+```
+
+## 5. SHAP Distribution (Beeswarm)
+
+```{r fastshap_beeswarm_test}
+print(results_fastshap_test$plots$shap_beeswarm)
+```
+
+## 6. Taxa Prevalence
+
+```{r fastshap_prevalence_test}
+print(results_fastshap_test$plots$shap_prevalence)
+```
+
+## 7. Integrated Biomarker Interpretation
+
+```{r fastshap_biomarker_mean_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_fastshap_test$plots$biomarker_integrated_mean)
+```
+
+```{r fastshap_biomarker_spearman_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_fastshap_test$plots$biomarker_integrated_spearman)
+```
+
+## 8. Permutation Importance (Heatmap)
+
+```{r fastshap_perm_heat_test}
+print(results_fastshap_test$plots$perm_heat)
+```
+
+# Scenario F: Fast SHAP Interpretability on Training Data (CLR)
+
+Finally, we apply the **fastshap approximation** directly to the **training set (`otu_mat`)**, allowing us to quickly inspect the internal feature relationships learned by the models before generalizing to unseen data.
+
+```{r run_fastshap_train}
+set.seed(42)
+
+results_fastshap_train <- RUMBLE(
+  input                = otu_mat,
+  metadata             = meta_df,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = NULL,
+  project_name         = "FastSHAP_Train_Analysis",
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "train",
+  normalization_method = "clr",
+  shap_method          = "fast"
+)
+```
+
+# Results (Fast SHAP on Training Data)
+
+```{r fastshap_metrics_train}
+knitr::kable(
+  results_fastshap_train$metrics,
+  digits = 3,
+  caption = "Model performance metrics (CLR, Matrix Input)."
+)
+```
+
+```{r fastshap_roc_train}
+print(results_fastshap_train$plots$roc)
+```
+
+# Interpretability on Training Data (Fast SHAP)
+
+```{r fastshap_spearman_train}
+print(results_fastshap_train$plots$shap_spearman)
+```
+
+```{r fastshap_mean_train}
+print(results_fastshap_train$plots$shap_mean)
+```
+
+```{r fastshap_biomarker_spearman_train, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_fastshap_train$plots$biomarker_integrated_spearman)
+```
+
+```{r fastshap_biomarker_mean_train, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_fastshap_train$plots$biomarker_integrated_mean)
+```
+
+```{r fastshap_beeswarm_train}
+print(results_fastshap_train$plots$shap_beeswarm)
+```
+# Part 5: Accelerated Interpretability with rCLR (Fast SHAP)
+
+In this final section, we combine both of RUMBLE's advanced optimizations: the **Robust CLR (rCLR)** normalization and the **Fast SHAP** approximation. This combination represents the most efficient and robust workflow for large-scale exploratory analysis, avoiding pseudocount-induced noise in tree-based models while maintaining rapid computation times.
+
+## Scenario G: Fast SHAP + rCLR on Test Data
+
+We run the pipeline applying the `rCLR` transformation and evaluating the fast SHAP consensus on the hold-out **test set**.
+
+```{r run_fastshap_rclr_test, results='hide'}
+set.seed(42)
+
+results_fastshap_rclr_test <- RUMBLE(
+  input                = ps,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = "Genus",
+  project_name         = "FastSHAP_rCLR_Test",
+  output_dir           = tempdir(),
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "test",
+  normalization_method = "rclr",
+  shap_method          = "fast"
+)
+```
+
+# Results (Fast SHAP + rCLR on Test Data)
+
+## Metrics Table
+
+```{r fastshap_rclr_metrics_test}
+knitr::kable(
+  results_fastshap_rclr_test$metrics,
+  digits = 3,
+  caption = "Model performance metrics (rCLR, Fast SHAP, Test Set)."
+)
+```
+
+## 1. Metrics Comparison
+
+```{r fastshap_rclr_metrics_plot_test}
+print(results_fastshap_rclr_test$plots$metrics)
+```
+
+## 2. ROC Curves
+
+```{r fastshap_rclr_roc_test}
+print(results_fastshap_rclr_test$plots$roc)
+```
+
+## 3. Confusion Matrices
+
+```{r fastshap_rclr_cm_test}
+print(results_fastshap_rclr_test$plots$cm)
+```
+
+## 4. Fast SHAP Consensus (Spearman & Mean SHAP)
+
+```{r fastshap_rclr_spearman_test}
+print(results_fastshap_rclr_test$plots$shap_spearman)
+```
+
+```{r fastshap_rclr_mean_test}
+print(results_fastshap_rclr_test$plots$shap_mean)
+```
+
+## 5. SHAP Distribution (Beeswarm)
+
+```{r fastshap_rclr_beeswarm_test}
+print(results_fastshap_rclr_test$plots$shap_beeswarm)
+```
+
+## 6. Taxa Prevalence
+
+```{r fastshap_rclr_prevalence_test}
+print(results_fastshap_rclr_test$plots$shap_prevalence)
+```
+
+## 7. Integrated Biomarker Interpretation
+
+```{r fastshap_rclr_biomarker_mean_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_fastshap_rclr_test$plots$biomarker_integrated_mean)
+```
+
+```{r fastshap_rclr_biomarker_spearman_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_fastshap_rclr_test$plots$biomarker_integrated_spearman)
+```
+
+## 8. Permutation Importance (Heatmap)
+
+```{r fastshap_rclr_perm_heat_test}
+print(results_fastshap_rclr_test$plots$perm_heat)
+```
+
+# Scenario H: Fast SHAP + rCLR on Training Data
+
+Lastly, we evaluate the **Fast SHAP + rCLR combination** directly on the **training set** using the count matrix input.
+
+```{r run_fastshap_rclr_train}
+set.seed(42)
+
+results_fastshap_rclr_train <- RUMBLE(
+  input                = otu_mat,
+  metadata             = meta_df,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = NULL,
+  project_name         = "FastSHAP_rCLR_Train",
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "train",
+  normalization_method = "rclr",
+  shap_method          = "fast"
+)
+```
+
+# Results (Fast SHAP + rCLR on Training Data)
+
+```{r fastshap_rclr_metrics_train}
+knitr::kable(
+  results_fastshap_rclr_train$metrics,
+  digits = 3,
+  caption = "Model performance metrics (rCLR, Matrix Input)."
+)
+```
+
+```{r fastshap_rclr_roc_train}
+print(results_fastshap_rclr_train$plots$roc)
+```
+
+# Interpretability on Training Data (Fast SHAP + rCLR)
+
+```{r fastshap_rclr_spearman_train}
+print(results_fastshap_rclr_train$plots$shap_spearman)
+```
+
+```{r fastshap_rclr_mean_train}
+print(results_fastshap_rclr_train$plots$shap_mean)
+```
+
+```{r fastshap_rclr_biomarker_spearman_train, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_fastshap_rclr_train$plots$biomarker_integrated_spearman)
+```
+
+```{r fastshap_rclr_biomarker_mean_train, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_fastshap_rclr_train$plots$biomarker_integrated_mean)
+```
+
+```{r fastshap_rclr_beeswarm_train}
+print(results_fastshap_rclr_train$plots$shap_beeswarm)
+```
+# Part 6: Quality Control with Predictive Elite Filter (Cut-offs)
+
+Extracting biological interpretability from a machine learning model that failed to learn meaningful patterns (e.g., predicting at the level of random chance) can severely pollute your biomarker consensus.
+
+To prevent this, RUMBLE introduces the **Predictive Elite Filter** via the `metric_cutoffs` parameter. Immediately after the evaluation phase, RUMBLE checks the performance metrics of all trained models against your defined thresholds. Any model failing to meet *all* specified criteria is automatically dropped and excluded from the computationally expensive SHAP analysis.
+
+In this section, we apply **standard CLR normalization** and **exact SHAP (DALEX)** while enforcing a minimum performance threshold.
+
+## Scenario I: Cut-offs on Test Data (Phyloseq)
+
+We will mandate that models must achieve a minimum **ROC AUC of 0.60** and a **Balanced Accuracy of 0.55** to participate in the biomarker consensus.
+
+*(Note: Thresholds are set relatively low here for demonstration purposes to ensure models pass during this fast, minimally-tuned run).*
+
+```{r run_cutoffs_test, results='hide'}
+set.seed(42)
+
+results_cutoffs_test <- RUMBLE(
+  input                = ps,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = "Genus",
+  project_name         = "Cutoffs_Test_Analysis",
+  output_dir           = tempdir(),
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "test",
+  normalization_method = "clr",
+  shap_method          = "exact",
+  metric_cutoffs       = c("roc_auc" = 0.60, "bal_accuracy" = 0.55)
+)
+```
+
+# Results (Cut-offs on Test Data)
+
+If any model failed the cut-offs, it will be entirely absent from the metrics table and all subsequent interpretability plots.
+
+## Metrics Table
+
+```{r cutoffs_metrics_test}
+knitr::kable(
+  results_cutoffs_test$metrics,
+  digits = 3,
+  caption = "Model performance metrics (Surviving models only, Test Set)."
+)
+```
+
+## 1. Metrics Comparison
+
+```{r cutoffs_metrics_plot_test}
+print(results_cutoffs_test$plots$metrics)
+```
+
+## 2. ROC Curves
+
+```{r cutoffs_roc_test}
+print(results_cutoffs_test$plots$roc)
+```
+
+## 3. Confusion Matrices
+
+```{r cutoffs_cm_test}
+print(results_cutoffs_test$plots$cm)
+```
+
+## 4. SHAP Consensus (Spearman & Mean SHAP)
+
+```{r cutoffs_shap_spearman_test}
+print(results_cutoffs_test$plots$shap_spearman)
+```
+
+```{r cutoffs_shap_mean_test}
+print(results_cutoffs_test$plots$shap_mean)
+```
+
+## 5. SHAP Distribution (Beeswarm)
+
+```{r cutoffs_beeswarm_test}
+print(results_cutoffs_test$plots$shap_beeswarm)
+```
+
+## 6. Taxa Prevalence
+
+```{r cutoffs_prevalence_test}
+print(results_cutoffs_test$plots$shap_prevalence)
+```
+
+## 7. Integrated Biomarker Interpretation
+
+```{r cutoffs_biomarker_mean_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Mean SHAP) and group prevalence."}
+print(results_cutoffs_test$plots$biomarker_integrated_mean)
+```
+
+```{r cutoffs_biomarker_spearman_test, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+print(results_cutoffs_test$plots$biomarker_integrated_spearman)
+```
+
+## 8. Permutation Importance (Heatmap)
+
+```{r cutoffs_perm_heat_test}
+print(results_cutoffs_test$plots$perm_heat)
+```
+
+# Scenario J: Cut-offs on Training Data (Matrix Input)
+
+We can also apply the predictive filter when evaluating interpretability directly on the **training data**. This ensures that even when looking for internal model dynamics, we are only extracting SHAP values from algorithms that successfully converged during cross-validation.
+
+```{r run_cutoffs_train}
+set.seed(42)
+
+results_cutoffs_train <- RUMBLE(
+  input                = otu_mat,
+  metadata             = meta_df,
+  outcome_var          = "ses",
+  class_of_interest    = "Low",
+  tax_level            = NULL,
+  project_name         = "Cutoffs_Train_Analysis",
+  grid_size            = 10,
+  shap_reps            = 2,
+  xgb_trees            = 100,
+  rf_trees             = 100,
+  n_cores              = 4,
+  shap_data            = "train",
+  normalization_method = "clr",
+  shap_method          = "exact",
+  metric_cutoffs       = c("roc_auc" = 0.60, "bal_accuracy" = 0.55)
+)
+```
+
+# Results (Cut-offs on Training Data)
+
+## Metrics Table
+
+```{r cutoffs_metrics_train}
+knitr::kable(
+  results_cutoffs_train$metrics,
+  digits = 3,
+  caption = "Model performance metrics (Surviving models only, Matrix Input)."
+)
+```
+
+## 1. Metrics Comparison
+
+```{r cutoffs_metrics_plot_train}
+print(results_cutoffs_train$plots$metrics)
+```
+
+## 2. ROC Curves
+
+```{r cutoffs_roc_train}
+print(results_cutoffs_train$plots$roc)
+```
+
+## 3. Confusion Matrices
+
+```{r cutoffs_cm_train}
+print(results_cutoffs_train$plots$cm)
+```
+
+## 4. SHAP Consensus (Spearman & Mean SHAP)
+
+```{r cutoffs_shap_spearman_train}
+print(results_cutoffs_train$plots$shap_spearman)
+```
+
+```{r cutoffs_shap_mean_train}
+print(results_cutoffs_train$plots$shap_mean)
+```
+
+## 5. SHAP Distribution (Beeswarm)
+
+```{r cutoffs_beeswarm_train}
+print(results_cutoffs_train$plots$shap_beeswarm)
+```
+
+## 6. Taxa Prevalence
+
+```{r cutoffs_prevalence_train}
+print(results_cutoffs_train$plots$shap_prevalence)
+```
+
+## 7. Integrated Biomarker Interpretation (Training Data)
+
+```{r cutoffs_biomarker_mean_train}
+print(results_cutoffs_train$plots$biomarker_integrated_mean)
+```
+
+```{r cutoffs_biomarker_spearman_train}
+print(results_cutoffs_train$plots$biomarker_integrated_spearman)
+```
+
+## 8. Permutation Importance (Heatmap)
+
+```{r cutoffs_perm_heat_train}
+print(results_cutoffs_train$plots$perm_heat)
+```
 # Session Information
 
 ```{r session_info}
