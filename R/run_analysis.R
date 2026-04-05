@@ -2,8 +2,10 @@
 #'
 #' Executes the complete RUMBLE analysis pipeline with publication-quality
 #' settings. This function performs data preparation, model training with
-#' hyperparameter tuning, evaluation on a held-out test set, and model-agnostic
-#' interpretability via SHAP values and permutation importance.
+#' hyperparameter tuning, evaluation on a held-out test set, model-agnostic
+#' interpretability via SHAP values and permutation importance, and a tree-
+#' specific ecological interpretation stage based on TreeSHAP S-R-I
+#' decomposition.
 #'
 #' \strong{Default Parameters:} The default values are configured for
 #' publication-quality analysis. All parameters are fully adjustable to allow
@@ -70,14 +72,12 @@
 #'   For quick exploratory analysis, you may reduce this to 500 to speed up
 #'   computation. Beyond 1000, improvements are marginal and risk of overfitting
 #'   increases.
-#'   \strong{Note:} This parameter only affects the XGBoost model, not Random
-#'   Forest, Elastic Net, or KNN models.
+#'   \strong{Note:} This parameter only affects the XGBoost model.
 #' @param rf_trees Integer. Number of trees for the Random Forest model
 #'   (default 500). The default value is well-established in the literature
 #'   and appropriate for both exploratory and publication-quality analysis.
 #'   Typically does not need adjustment.
-#'   \strong{Note:} This parameter only affects the Random Forest model, not
-#'   XGBoost, Elastic Net, or KNN models.
+#'   \strong{Note:} This parameter only affects the Random Forest model.
 #' @param min_prevalence Numeric. Minimum prevalence threshold for
 #'   taxa filtering (default 0.05).
 #' @param min_abundance Numeric. Minimum relative abundance to
@@ -100,12 +100,14 @@
 #'   Default is \code{NULL} (no filtering). This parameter ensures that only
 #'   high-quality models contribute to the consensus biomarker ranking.
 #'
-#' @return A named list with five elements:
+#' @return A named list with six elements:
 #'   \itemize{
 #'     \item \code{models}: Named list of fitted model objects and predictions.
 #'     \item \code{metrics}: Data.frame summarising performance metrics.
-#'     \item \code{importance}: List containing SHAP and permutation results.
-#'     \item \code{plots}: List of ggplot objects (ROC, Confusion Matrix, SHAP).
+#'     \item \code{importance}: List containing classical SHAP and permutation results.
+#'     \item \code{tree_ecology}: List containing TreeSHAP interaction outputs,
+#'       S-R-I decomposition tables, ecological profiles, and network edge tables.
+#'     \item \code{plots}: List of plot objects and generated network assets.
 #'     \item \code{data}: List with train and test data.frames.
 #'   }
 #'
@@ -401,6 +403,18 @@ RUMBLE <- function(input,
     verbose = verbose
   )
 
+  tree_ecology <- computeTreeShapEcology(
+    final_models = explainable_models,
+    train_data = train_data,
+    prediction_data = prediction_data,
+    target_var = outcome_var,
+    global_importance = importance$global_importance$spearman,
+    top_n = top_n,
+    output_dir = output_dir,
+    project_name = project_name,
+    verbose = verbose
+  )
+
   ## ==================================================================
   ## Generate plots
   ## ==================================================================
@@ -446,7 +460,17 @@ RUMBLE <- function(input,
     ),
     perm_heat = plotPermutationHeatmap(
       importance$permutation_top
-    )
+    ),
+    sri_decomposition = plotSriDecomposition(
+      tree_ecology$profile,
+      top_n = top_n
+    ),
+    sri_ecological_profile = plotSriEcologicalProfile(
+      tree_ecology$profile,
+      top_n = top_n
+    ),
+    sri_synergy_network = tree_ecology$network_files$synergy,
+    sri_redundancy_network = tree_ecology$network_files$redundancy
   )
 
   ## Metrics summary table
@@ -465,7 +489,8 @@ RUMBLE <- function(input,
     ## Plots
     plot_names <- c("metrics", "roc", "cm", "shap_spearman", "shap_mean",
                     "shap_beeswarm", "shap_prevalence",
-                    "biomarker_integrated_spearman", "biomarker_integrated_mean", "perm_heat")
+                    "biomarker_integrated_spearman", "biomarker_integrated_mean", "perm_heat",
+                    "sri_decomposition", "sri_ecological_profile")
 
     # Define sizes (width, height)
     plot_sizes <- list(
@@ -478,7 +503,9 @@ RUMBLE <- function(input,
       shap_prevalence               = c(9, 8),
       biomarker_integrated_spearman = c(12, 9),
       biomarker_integrated_mean     = c(12, 9),
-      perm_heat                     = c(9, 8)
+      perm_heat                     = c(9, 8),
+      sri_decomposition             = c(10, 8),
+      sri_ecological_profile        = c(10, 8)
     )
 
     for (pname in plot_names) {
@@ -509,6 +536,32 @@ RUMBLE <- function(input,
       importance$permutation_top,
       paste0(prefix, "_permutation_top.tsv")
     )
+    readr::write_tsv(
+      tree_ecology$profile,
+      paste0(prefix, "_tree_shap_sri_profile.tsv")
+    )
+    readr::write_tsv(
+      tree_ecology$synergy_edges,
+      paste0(prefix, "_tree_shap_synergy_edges.tsv")
+    )
+    readr::write_tsv(
+      tree_ecology$redundancy_edges,
+      paste0(prefix, "_tree_shap_redundancy_edges.tsv")
+    )
+    if (!is.null(tree_ecology$network_files$synergy) && file.exists(tree_ecology$network_files$synergy)) {
+      file.copy(
+        tree_ecology$network_files$synergy,
+        paste0(prefix, "_sri_synergy_network.png"),
+        overwrite = TRUE
+      )
+    }
+    if (!is.null(tree_ecology$network_files$redundancy) && file.exists(tree_ecology$network_files$redundancy)) {
+      file.copy(
+        tree_ecology$network_files$redundancy,
+        paste0(prefix, "_sri_redundancy_network.png"),
+        overwrite = TRUE
+      )
+    }
     msg("All outputs saved.")
   }
 
@@ -520,10 +573,11 @@ RUMBLE <- function(input,
   msg("======================================================")
 
   list(
-    models     = final_models,
-    metrics    = metrics_summary,
-    importance = importance,
-    plots      = plots,
-    data       = list(train = train_data, test = test_data)
+    models       = final_models,
+    metrics      = metrics_summary,
+    importance   = importance,
+    tree_ecology = tree_ecology,
+    plots        = plots,
+    data         = list(train = train_data, test = test_data)
   )
 }

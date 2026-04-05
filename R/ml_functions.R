@@ -11,8 +11,7 @@
 #' @importFrom recipes recipe step_zv step_normalize step_corr
 #'      all_predictors
 #' @importFrom themis step_downsample
-#' @importFrom parsnip rand_forest boost_tree logistic_reg
-#'      nearest_neighbor set_engine set_mode fit
+#' @importFrom parsnip rand_forest boost_tree set_engine set_mode fit
 #' @importFrom workflows workflow add_model add_recipe
 #' @importFrom tune tune tune_grid select_best finalize_workflow
 #'      control_grid
@@ -97,20 +96,6 @@ NULL
       min_n = tune::tune()
     ) %>%
       parsnip::set_engine("xgboost") %>%
-      parsnip::set_mode("classification"),
-
-    ENET = parsnip::logistic_reg(
-      penalty = tune::tune(),
-      mixture = tune::tune()
-    ) %>%
-      parsnip::set_engine("glmnet") %>%
-      parsnip::set_mode("classification"),
-
-    KNN = parsnip::nearest_neighbor(
-      neighbors = tune::tune(),
-      weight_func = tune::tune()
-    ) %>%
-      parsnip::set_engine("kknn") %>%
       parsnip::set_mode("classification")
   )
 

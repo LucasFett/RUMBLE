@@ -304,21 +304,14 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
       xintercept = 0, linetype = "dashed",
       color = "gray50", linewidth = 0.5
     ) +
-    # Background Boxplot
-    ggplot2::geom_boxplot(
-      width = 0.4,
-      outlier.shape = NA,
-      color = "black",
-      fill = "darkolivegreen3",
-      alpha = 0.6
-    ) +
-    # Beeswarm overlapping with shapes by model and color by direction.
+    # Beeswarm limpo, sem boxplot de fundo, com parâmetros calibrados contra sobreposição
     ggbeeswarm::geom_quasirandom(
       ggplot2::aes(shape = model, color = Direction),
       groupOnX = FALSE,
-      size = 1.8,
-      alpha = 0.65,
-      width = 0.25
+      size = 1.0,        # Reduzido de 1.8 para evitar que os pontos se esmaguem
+      alpha = 0.7,       # Transparência levemente aumentada
+      width = 0.35,      # Espalhamento vertical aumentado de 0.25 para 0.35
+      stroke = 0.2       # Contorno mais fino nos shapes
     ) +
     ggplot2::scale_color_gradient2(
       low = "#1f77b4", mid = "gray", high = "#d62728",
@@ -327,7 +320,8 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
       name = "Direction"
     ) +
     ggplot2::labs(
-      y = "Feature", x = "SHAP Contribution",
+      y = NULL, # Removido o título "Feature" do eixo Y para manter o gráfico mais limpo
+      x = "SHAP Contribution",
       title = "SHAP Distribution by Model",
       shape = "Model"
     ) +
@@ -482,6 +476,112 @@ plotPermutationHeatmap <- function(permutation_top) {
         angle = 45, hjust = 1
       )
     )
+}
+
+
+#' Plot S-R-I Stacked Decomposition
+#'
+#' Displays the ecological decomposition of the top biomarkers into
+#' independence, synergy and redundancy components.
+#'
+#' @param sri_profile A data.frame created by the TreeSHAP ecology stage.
+#' @param top_n Integer. Number of top taxa to display.
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @export
+plotSriDecomposition <- function(sri_profile, top_n = 20L) {
+  if (is.null(sri_profile) || nrow(sri_profile) == 0L) {
+    return(NULL)
+  }
+
+  df_plot <- utils::head(sri_profile, top_n)
+  taxa_levels <- rev(df_plot$variable)
+
+  df_long <- df_plot %>%
+    dplyr::select(
+      variable,
+      independence_value,
+      synergy_value,
+      redundancy_value,
+      ecological_role
+    ) %>%
+    tidyr::pivot_longer(
+      cols = c(independence_value, synergy_value, redundancy_value),
+      names_to = "component",
+      values_to = "value"
+    ) %>%
+    dplyr::mutate(
+      variable = factor(variable, levels = taxa_levels),
+      component = factor(
+        component,
+        levels = c("independence_value", "synergy_value", "redundancy_value"),
+        labels = c("Independence", "Synergy", "Redundancy")
+      )
+    )
+
+  ggplot2::ggplot(
+    df_long,
+    ggplot2::aes(x = value, y = variable, fill = component)
+  ) +
+    ggplot2::geom_col(width = 0.8) +
+    ggplot2::scale_fill_manual(
+      values = c(
+        Independence = "#1f77b4",
+        Synergy = "#d62728",
+        Redundancy = "#2ca02c"
+      )
+    ) +
+    ggplot2::labs(
+      title = "TreeSHAP S-R-I Decomposition",
+      subtitle = "Global SHAP importance partitioned into ecological components",
+      x = "Global Importance (absolute SHAP)",
+      y = NULL,
+      fill = "Component"
+    ) +
+    ggplot2::theme_minimal(base_size = 12)
+}
+
+
+#' Plot S-R-I Ecological Profile Summary
+#'
+#' Produces a compact point view of the ecological role and component balance
+#' for the top taxa recovered by the TreeSHAP ecology stage.
+#'
+#' @param sri_profile A data.frame created by the TreeSHAP ecology stage.
+#' @param top_n Integer. Number of taxa to display.
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @export
+plotSriEcologicalProfile <- function(sri_profile, top_n = 20L) {
+  if (is.null(sri_profile) || nrow(sri_profile) == 0L) {
+    return(NULL)
+  }
+
+  df_plot <- utils::head(sri_profile, top_n)
+  df_plot$variable <- factor(df_plot$variable, levels = rev(df_plot$variable))
+
+  ggplot2::ggplot(
+    df_plot,
+    ggplot2::aes(
+      x = independence_frac,
+      y = variable,
+      size = total_importance,
+      color = ecological_role
+    )
+  ) +
+    ggplot2::geom_point(alpha = 0.85) +
+    ggplot2::scale_color_manual(values = c(Pathogen = "#d62728", Protector = "#1f77b4")) +
+    ggplot2::labs(
+      title = "Ecological Profile of Top Biomarkers",
+      subtitle = "Node size encodes total importance and color encodes disease association",
+      x = "Independence fraction",
+      y = NULL,
+      color = "Role",
+      size = "Total importance"
+    ) +
+    ggplot2::theme_minimal(base_size = 12)
 }
 
 

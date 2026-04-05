@@ -8,10 +8,12 @@ Authors@R:
            comment = c(ORCID = "0009-0006-0596-3991"))
 Description: RUMBLE implements a consensus machine learning framework for
     identifying microbial biomarkers from high-throughput sequencing data.
-    The package integrates multiple classification algorithms via the 
-    tidymodels ecosystem, and provides model-agnostic interpretability 
-    through SHAP values and permutation importance (via DALEX). It handles 
-    compositional microbiome data using centered log-ratio (CLR) 
+    The package integrates Random Forest and XGBoost classifiers via the
+    tidymodels ecosystem, provides model-agnostic interpretability through
+    SHAP values and permutation importance (via DALEX), and adds a tree-
+    specific ecological interpretation layer based on TreeSHAP interaction
+    values with synergy, redundancy and independence decomposition. It
+    handles compositional microbiome data using centered log-ratio (CLR)
     transformations.
 License: GPL-3
 Encoding: UTF-8
@@ -36,6 +38,7 @@ Imports:
     ggbeeswarm,
     ggplot2,
     ggsci,
+    hardhat,
     methods,
     microbiome,
     parallel,
@@ -45,12 +48,14 @@ Imports:
     purrr,
     readr,
     recipes,
+    reticulate,
     rlang,
     rsample,
     scales,
     stats,
     themis,
     tidyr,
+    treeshap,
     tune,
     vegan,
     viridis,
@@ -63,11 +68,11 @@ Suggests:
     rmarkdown,
     testthat (>= 3.0.0),
     tidymodels,
-    glmnet,
-    kknn,
     ranger,
     xgboost,
     magick
+Remotes: 
+    ModelOriented/treeshap
 VignetteBuilder: knitr
 BugReports: https://github.com/LucasFett/RUMBLE/issues
 URL: https://github.com/LucasFett/RUMBLE

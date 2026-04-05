@@ -7,7 +7,7 @@ RUMBLE is an R/Bioconductor package that implements a consensus machine learning
 
 # Overview
 
-RUMBLE integrates multiple classification algorithms (**Random Forest**, **XGBoost**, **Elastic Net**, and **KNN**) via the *tidymodels* ecosystem and provides model-agnostic interpretability through SHAP values and permutation importance (via *DALEX*).
+RUMBLE integrates a consensus tree-based classification framework (**Random Forest** and **XGBoost**) via the *tidymodels* ecosystem, provides model-agnostic interpretability through SHAP values and permutation importance (via *DALEX*), and adds a TreeSHAP-based ecological interpretation layer with synergy, redundancy, and independence (S-R-I) decomposition.
 
 The consensus approach ranks biomarkers across all models, using Spearman correlation to correctly map SHAP directionality, providing robust and reproducible feature selection for microbiome research.
 
@@ -70,14 +70,17 @@ print(results$metrics)
   - taxonomic aggregation  
   - prevalence filtering  
   - compositional normalization (**CLR** or **rCLR**)  
-- Four ML algorithms with hyperparameter tuning via parallelized cross-validation  
+- Two tree-based ML algorithms with hyperparameter tuning via parallelized cross-validation (**Random Forest** and **XGBoost**)  
 - Optional `metric_cutoffs` to filter out underperforming models before SHAP interpretation  
 - SHAP-based consensus biomarker ranking using Spearman correlation to prevent sparsity-induced directionality errors  
+- TreeSHAP interaction analysis with S-R-I ecological decomposition for the top biomarkers  
 - Publication-ready visualizations:
   - ROC curves  
   - Confusion matrices  
   - SHAP beeswarm plots  
   - Integrated biomarker prevalence  
+  - S-R-I stacked decomposition  
+  - Synergy and redundancy ecological network assets  
 
 ---
 
@@ -99,8 +102,8 @@ This approach calculates the transformation strictly on non-zero values, preserv
 
 While rCLR shields tree-based models from pseudocount noise, it is currently considered experimental in RUMBLE due to the following mathematical biases:
 
-### 1. Model Misinterpretation
-Linear (**Elastic Net**) and distance-based (**KNN**) models may misinterpret true zeros (absence) as intermediate values between low and high abundance.
+### 1. Tree-Only Modeling Scope
+RUMBLE now restricts its predictive core to tree-based learners (**Random Forest** and **XGBoost**), because rCLR is more coherent with split-based models than with linear or distance-based learners.
 
 ### 2. Directionality Disruption
 The default SHAP direction metric (Spearman correlation) evaluates continuous ranks and struggles to capture the non-monotonic biological trajectory:
@@ -114,7 +117,7 @@ Without pseudocount inflation, true zeros (0) reduce the global SHAP impact of s
 
 ---
 
-We are actively researching solutions to improve SHAP directionality under rCLR for future releases.
+We are actively researching solutions to improve SHAP directionality under rCLR for future releases, including more robust ecological summaries of interaction structure.
 
 ---
 

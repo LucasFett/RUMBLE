@@ -97,15 +97,13 @@ The default value (1000) is recommended for publication-quality results.
 For quick exploratory analysis, you may reduce this to 500 to speed up
 computation. Beyond 1000, improvements are marginal and risk of overfitting
 increases.
-\strong{Note:} This parameter only affects the XGBoost model, not Random
-Forest, Elastic Net, or KNN models.}
+\strong{Note:} This parameter only affects the XGBoost model.}
 
 \item{rf_trees}{Integer. Number of trees for the Random Forest model
 (default 500). The default value is well-established in the literature
 and appropriate for both exploratory and publication-quality analysis.
 Typically does not need adjustment.
-\strong{Note:} This parameter only affects the Random Forest model, not
-XGBoost, Elastic Net, or KNN models.}
+\strong{Note:} This parameter only affects the Random Forest model.}
 
 \item{min_prevalence}{Numeric. Minimum prevalence threshold for
 taxa filtering (default 0.05).}
@@ -143,20 +141,24 @@ Default is \code{NULL} (no filtering). This parameter ensures that only
 high-quality models contribute to the consensus biomarker ranking.}
 }
 \value{
-A named list with five elements:
+A named list with six elements:
 \itemize{
 \item \code{models}: Named list of fitted model objects and predictions.
 \item \code{metrics}: Data.frame summarising performance metrics.
-\item \code{importance}: List containing SHAP and permutation results.
-\item \code{plots}: List of ggplot objects (ROC, Confusion Matrix, SHAP).
+\item \code{importance}: List containing classical SHAP and permutation results.
+\item \code{tree_ecology}: List containing TreeSHAP interaction outputs,
+S-R-I decomposition tables, ecological profiles, and network edge tables.
+\item \code{plots}: List of plot objects and generated network assets.
 \item \code{data}: List with train and test data.frames.
 }
 }
 \description{
 Executes the complete RUMBLE analysis pipeline with publication-quality
 settings. This function performs data preparation, model training with
-hyperparameter tuning, evaluation on a held-out test set, and model-agnostic
-interpretability via SHAP values and permutation importance.
+hyperparameter tuning, evaluation on a held-out test set, model-agnostic
+interpretability via SHAP values and permutation importance, and a tree-
+specific ecological interpretation stage based on TreeSHAP S-R-I
+decomposition.
 }
 \details{
 \strong{Default Parameters:} The default values are configured for
