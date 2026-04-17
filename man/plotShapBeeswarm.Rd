@@ -4,12 +4,15 @@
 \alias{plotShapBeeswarm}
 \title{Plot SHAP Beeswarm Plot}
 \usage{
-plotShapBeeswarm(shap_raw, top_n = 20L)
+plotShapBeeswarm(shap_raw, top_n = 20L, model = NULL)
 }
 \arguments{
 \item{shap_raw}{A data.frame of raw SHAP values.}
 
 \item{top_n}{Integer. Number of top features to show (default 20).}
+
+\item{model}{Character or \code{NULL}. Optional model name to isolate a
+specific model in the beeswarm plot.}
 }
 \value{
 A \code{ggplot} object.

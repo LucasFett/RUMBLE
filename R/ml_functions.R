@@ -26,6 +26,7 @@
 #' @importFrom dplyr bind_cols select bind_rows
 #' @importFrom stats predict as.formula
 #' @importFrom withr with_seed
+#' @importFrom magrittr "%>%"
 NULL
 
 

@@ -64,6 +64,12 @@
 #'   The exact method is recommended for publication-quality results.
 #'   The fast method provides a good approximation with significantly
 #'   reduced computation time, suitable for exploratory analysis.
+#' @param shap_model Character vector controlling which model-specific SHAP
+#'   profiles are generated in addition to the consensus plots. Use
+#'   \code{"all"} (default) to generate isolated outputs for every model that
+#'   passes \code{metric_cutoffs}, \code{"consensus"} to skip isolated model
+#'   plots, or provide one or more model names (for example,
+#'   \code{c("RF", "XGB")}).
 #' @param xgb_trees Integer. Number of trees for the XGBoost model
 #'   (default 1000). XGBoost is sensitive to the number of boosting iterations.
 #'   The default value (1000) is recommended for publication-quality results.
@@ -100,13 +106,16 @@
 #'   Default is \code{NULL} (no filtering). This parameter ensures that only
 #'   high-quality models contribute to the consensus biomarker ranking.
 #'
-#' @return A named list with five elements:
+#' @return A named list with six elements:
 #'   \itemize{
 #'     \item \code{models}: Named list of fitted model objects and predictions.
 #'     \item \code{metrics}: Data.frame summarising performance metrics.
 #'     \item \code{importance}: List containing SHAP and permutation results.
-#'     \item \code{plots}: List of ggplot objects (ROC, Confusion Matrix, SHAP).
+#'     \item \code{plots}: List of ggplot objects, including consensus and
+#'       optional model-specific SHAP plots.
 #'     \item \code{data}: List with train and test data.frames.
+#'     \item \code{selected_models}: Character vector of models used for
+#'       interpretability after applying \code{metric_cutoffs}.
 #'   }
 #'
 #' @examples
@@ -186,15 +195,12 @@ RUMBLE <- function(input,
                    verbose = TRUE,
                    shap_data = "test",
                    shap_method = "exact",
+                   shap_model = "all",
                    metric_cutoffs = NULL) {
 
   msg <- function(...) {
     if (verbose) message(...)
   }
-
-  # Set global option for yardstick to use second level as event
-  old_opts <- options(yardstick.event_first = FALSE)
-  on.exit(options(old_opts), add = TRUE)
 
   ## ==================================================================
   ## 1. Data preparation
@@ -386,6 +392,29 @@ RUMBLE <- function(input,
     stop("Invalid 'shap_data' parameter. Use 'test' or 'train'.")
   }
 
+  selected_shap_models <- names(explainable_models)
+
+  if (length(selected_shap_models) == 0L) {
+    stop("No models available for interpretability after filtering.")
+  }
+
+  if (length(shap_model) == 1L && identical(shap_model, "all")) {
+    shap_models_to_plot <- selected_shap_models
+  } else if (length(shap_model) == 1L && identical(shap_model, "consensus")) {
+    shap_models_to_plot <- character(0)
+  } else {
+    invalid_models <- setdiff(shap_model, selected_shap_models)
+    if (length(invalid_models) > 0L) {
+      stop(
+        "Invalid 'shap_model' selection: ",
+        paste(invalid_models, collapse = ", "),
+        ". Available models after filtering: ",
+        paste(selected_shap_models, collapse = ", ")
+      )
+    }
+    shap_models_to_plot <- shap_model
+  }
+
   # Explainer MUST always be created with train data
   # Utilizando a lista explainable_models filtrada
   explainers <- createExplainers(
@@ -405,6 +434,71 @@ RUMBLE <- function(input,
   ## Generate plots
   ## ==================================================================
   msg("Generating plots...")
+
+  model_specific_plots <- list(
+    shap_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
+    shap_mean = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
+    shap_beeswarm = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
+    shap_prevalence = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
+    biomarker_integrated_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
+    biomarker_integrated_mean = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot)
+  )
+
+  if (length(shap_models_to_plot) > 0L) {
+    for (model_name in shap_models_to_plot) {
+      model_specific_plots$shap_spearman[[model_name]] <- plotShapGlobal(
+        importance$shap_top$spearman,
+        outcome_var,
+        class_of_interest = class_of_interest,
+        negative_class = negative_class,
+        top_n = top_n,
+        metric_name = "Spearman",
+        model = model_name
+      )
+      model_specific_plots$shap_mean[[model_name]] <- plotShapGlobal(
+        importance$shap_top$mean_shap,
+        outcome_var,
+        class_of_interest = class_of_interest,
+        negative_class = negative_class,
+        top_n = top_n,
+        metric_name = "Mean SHAP",
+        model = model_name
+      )
+      model_specific_plots$shap_beeswarm[[model_name]] <- plotShapBeeswarm(
+        importance$shap_raw,
+        top_n = top_n,
+        model = model_name
+      )
+      model_specific_plots$shap_prevalence[[model_name]] <- plotTaxaPrevalence(
+        prediction_data,
+        importance$shap_top$spearman,
+        target_var = outcome_var,
+        top_n = top_n,
+        model = model_name
+      )
+      model_specific_plots$biomarker_integrated_spearman[[model_name]] <- plotBiomarkerIntegrated(
+        prediction_data,
+        importance$shap_top$spearman,
+        target_var = outcome_var,
+        top_n = top_n,
+        class_of_interest = class_of_interest,
+        negative_class = negative_class,
+        metric_name = "Spearman",
+        model = model_name
+      )
+      model_specific_plots$biomarker_integrated_mean[[model_name]] <- plotBiomarkerIntegrated(
+        prediction_data,
+        importance$shap_top$mean_shap,
+        target_var = outcome_var,
+        top_n = top_n,
+        class_of_interest = class_of_interest,
+        negative_class = negative_class,
+        metric_name = "Mean SHAP",
+        model = model_name
+      )
+    }
+  }
+
   plots <- list(
     metrics   = plotMetricsComparison(final_models),
     roc       = plotRocCurves(final_models, outcome_var),
@@ -446,7 +540,8 @@ RUMBLE <- function(input,
     ),
     perm_heat = plotPermutationHeatmap(
       importance$permutation_top
-    )
+    ),
+    model_specific = model_specific_plots
   )
 
   ## Metrics summary table
@@ -492,6 +587,43 @@ RUMBLE <- function(input,
       }
     }
 
+    if (length(shap_models_to_plot) > 0L) {
+      for (model_name in shap_models_to_plot) {
+        model_slug <- gsub("[^A-Za-z0-9]+", "_", model_name)
+
+        ggplot2::ggsave(
+          filename = paste0(prefix, "_", model_slug, "_shap_spearman.png"),
+          plot = plots$model_specific$shap_spearman[[model_name]],
+          width = 9, height = 8, dpi = 300
+        )
+        ggplot2::ggsave(
+          filename = paste0(prefix, "_", model_slug, "_shap_mean.png"),
+          plot = plots$model_specific$shap_mean[[model_name]],
+          width = 9, height = 8, dpi = 300
+        )
+        ggplot2::ggsave(
+          filename = paste0(prefix, "_", model_slug, "_shap_beeswarm.png"),
+          plot = plots$model_specific$shap_beeswarm[[model_name]],
+          width = 10, height = 8, dpi = 300
+        )
+        ggplot2::ggsave(
+          filename = paste0(prefix, "_", model_slug, "_shap_prevalence.png"),
+          plot = plots$model_specific$shap_prevalence[[model_name]],
+          width = 9, height = 8, dpi = 300
+        )
+        ggplot2::ggsave(
+          filename = paste0(prefix, "_", model_slug, "_biomarker_integrated_spearman.png"),
+          plot = plots$model_specific$biomarker_integrated_spearman[[model_name]],
+          width = 12, height = 9, dpi = 300
+        )
+        ggplot2::ggsave(
+          filename = paste0(prefix, "_", model_slug, "_biomarker_integrated_mean.png"),
+          plot = plots$model_specific$biomarker_integrated_mean[[model_name]],
+          width = 12, height = 9, dpi = 300
+        )
+      }
+    }
+
     ## Tables
     readr::write_tsv(
       metrics_summary,
@@ -504,6 +636,14 @@ RUMBLE <- function(input,
     readr::write_tsv(
       importance$global_importance$mean_shap,
       paste0(prefix, "_shap_global_mean_shap.tsv")
+    )
+    readr::write_tsv(
+      importance$shap_top$spearman,
+      paste0(prefix, "_shap_model_spearman.tsv")
+    )
+    readr::write_tsv(
+      importance$shap_top$mean_shap,
+      paste0(prefix, "_shap_model_mean_shap.tsv")
     )
     readr::write_tsv(
       importance$permutation_top,
@@ -524,6 +664,7 @@ RUMBLE <- function(input,
     metrics    = metrics_summary,
     importance = importance,
     plots      = plots,
-    data       = list(train = train_data, test = test_data)
+    data       = list(train = train_data, test = test_data),
+    selected_models = selected_shap_models
   )
 }

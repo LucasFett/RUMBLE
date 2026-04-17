@@ -28,6 +28,7 @@ RUMBLE(
   verbose = TRUE,
   shap_data = "test",
   shap_method = "exact",
+  shap_model = "all",
   metric_cutoffs = NULL
 )
 }
@@ -135,6 +136,13 @@ The exact method is recommended for publication-quality results.
 The fast method provides a good approximation with significantly
 reduced computation time, suitable for exploratory analysis.}
 
+\item{shap_model}{Character vector controlling which model-specific SHAP
+profiles are generated in addition to the consensus plots. Use
+\code{"all"} (default) to generate isolated outputs for every model that
+passes \code{metric_cutoffs}, \code{"consensus"} to skip isolated model
+plots, or provide one or more model names (for example,
+\code{c("RF", "XGB")}).}
+
 \item{metric_cutoffs}{Named numeric vector. Optional quality filter for models
 based on performance metrics. Models failing to meet the specified thresholds
 are excluded from the SHAP analysis. Example:
@@ -143,13 +151,16 @@ Default is \code{NULL} (no filtering). This parameter ensures that only
 high-quality models contribute to the consensus biomarker ranking.}
 }
 \value{
-A named list with five elements:
+A named list with six elements:
 \itemize{
 \item \code{models}: Named list of fitted model objects and predictions.
 \item \code{metrics}: Data.frame summarising performance metrics.
 \item \code{importance}: List containing SHAP and permutation results.
-\item \code{plots}: List of ggplot objects (ROC, Confusion Matrix, SHAP).
+\item \code{plots}: List of ggplot objects, including consensus and
+optional model-specific SHAP plots.
 \item \code{data}: List with train and test data.frames.
+\item \code{selected_models}: Character vector of models used for
+interpretability after applying \code{metric_cutoffs}.
 }
 }
 \description{

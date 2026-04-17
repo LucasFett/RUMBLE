@@ -4,16 +4,27 @@
 \alias{plotTaxaPrevalence}
 \title{Plot Taxa Prevalence for Top SHAP Features}
 \usage{
-plotTaxaPrevalence(data, global_importance, target_var, top_n = 20L)
+plotTaxaPrevalence(
+  data,
+  global_importance,
+  target_var,
+  top_n = 20L,
+  model = NULL
+)
 }
 \arguments{
 \item{data}{The data.frame used for SHAP (test or train).}
 
-\item{global_importance}{Global importance data.frame.}
+\item{global_importance}{Global importance data.frame or per-model importance
+table.}
 
 \item{target_var}{Character. Name of the target variable.}
 
 \item{top_n}{Integer. Number of top features to show (default 20).}
+
+\item{model}{Character or \code{NULL}. Optional model name for isolated
+prevalence plots when \code{global_importance} contains a \code{model}
+column.}
 }
 \value{
 A \code{ggplot} object.

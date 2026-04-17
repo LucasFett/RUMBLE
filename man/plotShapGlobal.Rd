@@ -2,7 +2,7 @@
 % Please edit documentation in R/plot_functions.R
 \name{plotShapGlobal}
 \alias{plotShapGlobal}
-\title{Plot Global SHAP Consensus}
+\title{Plot Global SHAP Consensus or Model-Specific SHAP Profiles}
 \usage{
 plotShapGlobal(
   global_importance,
@@ -10,13 +10,15 @@ plotShapGlobal(
   class_of_interest,
   negative_class,
   top_n = 20L,
-  metric_name = "Spearman"
+  metric_name = "Spearman",
+  model = NULL
 )
 }
 \arguments{
 \item{global_importance}{A data.frame from
 \code{\link{computeFeatureImportance}} containing columns
-\code{variable}, \code{mean_shap}, and \code{direction}.}
+\code{variable}, \code{direction}, and either \code{mean_shap}
+(consensus tables) or \code{mean_abs_contribution} (per-model tables).}
 
 \item{target_var}{Character. Name of the target variable.}
 
@@ -27,12 +29,16 @@ plotShapGlobal(
 \item{top_n}{Integer. Number of top features to display (default 20).}
 
 \item{metric_name}{Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").}
+
+\item{model}{Character or \code{NULL}. Optional model name for isolated
+plots when \code{global_importance} contains a \code{model} column.}
 }
 \value{
 A \code{ggplot} object.
 }
 \description{
-Produces a directional barplot of the top features ranked by mean
-absolute SHAP value across all models. Color indicates the direction
-of the effect.
+Produces a directional barplot of the top features ranked by SHAP
+importance. By default, it uses consensus rankings across models, but it can
+also display the isolated profile of a specific model when a per-model SHAP
+table is supplied.
 }

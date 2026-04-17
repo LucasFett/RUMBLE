@@ -347,7 +347,7 @@ computeFeatureImportance <- function(explainers,
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(
       mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
-      direction = sign(stats::cor(feature_value, contribution, method = "spearman")),
+      direction = suppressWarnings(sign(stats::cor(feature_value, contribution, method = "spearman"))),
       .groups = "drop"
     ) %>%
     dplyr::arrange(model, dplyr::desc(mean_abs_contribution)) %>%
@@ -360,7 +360,7 @@ computeFeatureImportance <- function(explainers,
     dplyr::group_by(variable) %>%
     dplyr::summarise(
       mean_shap = mean(abs(contribution), na.rm = TRUE),
-      direction = sign(stats::cor(feature_value, contribution, method = "spearman")),
+      direction = suppressWarnings(sign(stats::cor(feature_value, contribution, method = "spearman"))),
       n_models  = dplyr::n_distinct(model),
       .groups   = "drop"
     ) %>%

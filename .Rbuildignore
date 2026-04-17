@@ -11,3 +11,5 @@
 ^vignettes/.*_cache$
 ^vignettes/.*_files$
 ^vignettes/.*\.html$
+^doc$
+^Meta$

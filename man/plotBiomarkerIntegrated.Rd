@@ -11,13 +11,15 @@ plotBiomarkerIntegrated(
   top_n = 20L,
   class_of_interest,
   negative_class,
-  metric_name = "Spearman"
+  metric_name = "Spearman",
+  model = NULL
 )
 }
 \arguments{
 \item{data}{The data.frame used for SHAP.}
 
-\item{global_importance}{Global importance data.frame.}
+\item{global_importance}{Global importance data.frame or per-model importance
+table.}
 
 \item{target_var}{Character. Name of the target variable.}
 
@@ -28,6 +30,9 @@ plotBiomarkerIntegrated(
 \item{negative_class}{Character.}
 
 \item{metric_name}{Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").}
+
+\item{model}{Character or \code{NULL}. Optional model name for isolated
+biomarker interpretation.}
 }
 \value{
 A \code{patchwork} object.

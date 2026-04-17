@@ -92,20 +92,66 @@ plotRocCurves <- function(final_models, target_var) {
 }
 
 
-#' Plot Global SHAP Consensus
+.selectImportanceTable <- function(importance_df, model = NULL) {
+  if (!all(c("variable", "direction") %in% colnames(importance_df))) {
+    stop("Importance table must contain at least 'variable' and 'direction' columns.")
+  }
+
+  score_col <- NULL
+  if ("mean_shap" %in% colnames(importance_df)) {
+    score_col <- "mean_shap"
+  }
+  if (is.null(score_col) && "mean_abs_contribution" %in% colnames(importance_df)) {
+    score_col <- "mean_abs_contribution"
+  }
+  if (is.null(score_col)) {
+    stop("Importance table must contain either 'mean_shap' or 'mean_abs_contribution'.")
+  }
+
+  has_model <- "model" %in% colnames(importance_df)
+
+  if (!has_model) {
+    if (!is.null(model) && !identical(model, "consensus")) {
+      stop("This importance table does not contain per-model results. Use the consensus table or provide a table with a 'model' column.")
+    }
+    out <- importance_df
+    out$model <- "Consensus"
+  } else {
+    out <- importance_df
+    if (!is.null(model)) {
+      available_models <- unique(out$model)
+      if (!all(model %in% available_models)) {
+        stop(
+          "Invalid model selection. Available models: ",
+          paste(available_models, collapse = ", ")
+        )
+      }
+      out <- out[out$model %in% model, , drop = FALSE]
+    }
+  }
+
+  out$importance_value <- out[[score_col]]
+  out
+}
+
+#' Plot Global SHAP Consensus or Model-Specific SHAP Profiles
 #'
-#' Produces a directional barplot of the top features ranked by mean
-#' absolute SHAP value across all models. Color indicates the direction
-#' of the effect.
+#' Produces a directional barplot of the top features ranked by SHAP
+#' importance. By default, it uses consensus rankings across models, but it can
+#' also display the isolated profile of a specific model when a per-model SHAP
+#' table is supplied.
 #'
 #' @param global_importance A data.frame from
 #'      \code{\link{computeFeatureImportance}} containing columns
-#'      \code{variable}, \code{mean_shap}, and \code{direction}.
+#'      \code{variable}, \code{direction}, and either \code{mean_shap}
+#'      (consensus tables) or \code{mean_abs_contribution} (per-model tables).
 #' @param target_var Character. Name of the target variable.
 #' @param class_of_interest Character. Label of the class of interest.
 #' @param negative_class Character. Label of the negative/reference class.
 #' @param top_n Integer. Number of top features to display (default 20).
 #' @param metric_name Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").
+#' @param model Character or \code{NULL}. Optional model name for isolated
+#'   plots when \code{global_importance} contains a \code{model} column.
 #'
 #' @return A \code{ggplot} object.
 #'
@@ -114,8 +160,8 @@ plotShapGlobal <- function(global_importance, target_var,
                            class_of_interest,
                            negative_class,
                            top_n = 20L,
-                           metric_name = "Spearman") {
-  # Validate parameters
+                           metric_name = "Spearman",
+                           model = NULL) {
   if (missing(class_of_interest)) {
     stop("'class_of_interest' is required in plotShapGlobal().")
   }
@@ -124,18 +170,27 @@ plotShapGlobal <- function(global_importance, target_var,
     stop("'negative_class' is required in plotShapGlobal().")
   }
 
-  df_plot <- head(global_importance, top_n)
+  df_plot <- .selectImportanceTable(global_importance, model = model)
+  df_plot <- df_plot %>%
+    dplyr::arrange(dplyr::desc(importance_value)) %>%
+    dplyr::slice_head(n = top_n)
 
   df_plot$directional_value <- ifelse(
     df_plot$direction < 0,
-    df_plot$mean_shap * -1,
-    df_plot$mean_shap
+    df_plot$importance_value * -1,
+    df_plot$importance_value
   )
+
+  plot_title <- if (is.null(model)) {
+    paste0("Biomarker Consensus (", metric_name, ")")
+  } else {
+    paste0("Biomarker Profile: ", model, " (", metric_name, ")")
+  }
 
   ggplot2::ggplot(
     df_plot,
     ggplot2::aes(
-      x = reorder(variable, mean_shap),
+      x = reorder(variable, importance_value),
       y = directional_value, fill = direction
     )
   ) +
@@ -149,7 +204,7 @@ plotShapGlobal <- function(global_importance, target_var,
     ggplot2::labs(
       x = NULL,
       y = paste0("Mean SHAP contribution (", metric_name, ")"),
-      title = paste0("Biomarker Consensus (", metric_name, ")"),
+      title = plot_title,
       subtitle = paste0(
         target_var, ": <- ", negative_class,
         " | ", class_of_interest, " ->"
@@ -275,11 +330,25 @@ plotMetricsComparison <- function(final_models) {
 #'
 #' @param shap_raw A data.frame of raw SHAP values.
 #' @param top_n Integer. Number of top features to show (default 20).
+#' @param model Character or \code{NULL}. Optional model name to isolate a
+#'   specific model in the beeswarm plot.
 #'
 #' @return A \code{ggplot} object.
 #'
 #' @export
-plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
+plotShapBeeswarm <- function(shap_raw, top_n = 20L, model = NULL) {
+
+  if (!is.null(model)) {
+    available_models <- unique(shap_raw$model)
+    if (!all(model %in% available_models)) {
+      stop(
+        "Invalid model selection. Available models: ",
+        paste(available_models, collapse = ", ")
+      )
+    }
+    shap_raw <- shap_raw[shap_raw$model %in% model, , drop = FALSE]
+  }
+
   top_features <- shap_raw %>%
     dplyr::group_by(variable) %>%
     dplyr::summarize(mean_abs = mean(abs(contribution)), .groups = "drop") %>%
@@ -291,6 +360,12 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
 
   # Define the exact direction (-1 for negative, 1 for positive) for the color gradient.
   shap_filtered$Direction <- sign(shap_filtered$contribution)
+
+  plot_title <- if (is.null(model)) {
+    "SHAP Distribution by Model"
+  } else {
+    paste0("SHAP Distribution: ", model)
+  }
 
   ggplot2::ggplot(
     shap_filtered,
@@ -304,21 +379,13 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
       xintercept = 0, linetype = "dashed",
       color = "gray50", linewidth = 0.5
     ) +
-    # Background Boxplot
-    ggplot2::geom_boxplot(
-      width = 0.4,
-      outlier.shape = NA,
-      color = "black",
-      fill = "darkolivegreen3",
-      alpha = 0.6
-    ) +
-    # Beeswarm overlapping with shapes by model and color by direction.
     ggbeeswarm::geom_quasirandom(
       ggplot2::aes(shape = model, color = Direction),
       groupOnX = FALSE,
-      size = 1.8,
-      alpha = 0.65,
-      width = 0.25
+      size = 1.0,
+      alpha = 0.7,
+      width = 0.35,
+      stroke = 0.2
     ) +
     ggplot2::scale_color_gradient2(
       low = "#1f77b4", mid = "gray", high = "#d62728",
@@ -327,8 +394,9 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
       name = "Direction"
     ) +
     ggplot2::labs(
-      y = "Feature", x = "SHAP Contribution",
-      title = "SHAP Distribution by Model",
+      y = NULL,
+      x = "SHAP Contribution",
+      title = plot_title,
       shape = "Model"
     ) +
     ggplot2::theme_minimal(base_size = 12) +
@@ -344,39 +412,38 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L) {
 #' Displays the prevalence of top SHAP features in the dataset.
 #'
 #' @param data The data.frame used for SHAP (test or train).
-#' @param global_importance Global importance data.frame.
+#' @param global_importance Global importance data.frame or per-model importance
+#'   table.
 #' @param target_var Character. Name of the target variable.
 #' @param top_n Integer. Number of top features to show (default 20).
+#' @param model Character or \code{NULL}. Optional model name for isolated
+#'   prevalence plots when \code{global_importance} contains a \code{model}
+#'   column.
 #'
 #' @return A \code{ggplot} object.
 #'
 #' @export
-plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L) {
-  # 1. Pega os top táxons e cria uma ordem fixa baseada na importância (mean_shap)
-  top_taxa_df <- head(global_importance, top_n)
+plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L,
+                               model = NULL) {
+  top_taxa_df <- .selectImportanceTable(global_importance, model = model) %>%
+    dplyr::arrange(dplyr::desc(importance_value)) %>%
+    dplyr::slice_head(n = top_n)
+
   top_taxa <- top_taxa_df$variable
-  taxa_order <- top_taxa_df$variable[order(top_taxa_df$mean_shap)]
+  taxa_order <- top_taxa_df$variable[order(top_taxa_df$importance_value)]
 
   X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
   groups <- data[[target_var]]
-
-  # CRITICAL FIX: Detect if data is rCLR (has exact zeros) or CLR (no exact zeros)
-  # rCLR preserves true zeros as exactly 0, while CLR transforms all values
-  # Tolerância para resíduos de ponto flutuante
   has_exact_zeros <- (sum(abs(X_data) < 1e-12) / length(X_data)) > 0.05
 
   prev_list <- lapply(levels(groups), function(lvl) {
     idx <- which(groups == lvl)
-    # Pega TODAS as bactérias da amostra (necessário para a lógica de CLR)
     X_group <- X_data[idx, , drop = FALSE]
-    # Pega apenas as bactérias de interesse para plotar
     subset_data <- X_group[, top_taxa, drop = FALSE]
 
     if (has_exact_zeros) {
-      # Logic for rCLR: Valores minúsculos são verdadeiras ausências
       presence_matrix <- abs(subset_data) > 1e-12
     } else {
-      # CRITICAL FIX: O "zero" verdadeiro é a abundância mínima da linha INTEIRA,
       full_row_mins <- apply(X_group, 1, min)
       presence_matrix <- sweep(subset_data, 1, full_row_mins + 1e-6, ">")
     }
@@ -386,22 +453,23 @@ plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L)
   })
 
   df_prev <- dplyr::bind_rows(prev_list)
-
-  # 2. Trava a variável como um fator na ordem exata do SHAP
   df_prev$variable <- factor(df_prev$variable, levels = taxa_order)
-
-  # 3. Força as cores para baterem com o SHAP: Azul (referência) e Vermelho (interesse)
   class_colors <- stats::setNames(c("#1f77b4", "#d62728"), levels(groups))
+
+  plot_title <- if (is.null(model)) {
+    "Prevalence of Top Biomarkers"
+  } else {
+    paste0("Prevalence of Top Biomarkers: ", model)
+  }
 
   ggplot2::ggplot(
     df_prev,
-    # Removemos o reorder() e usamos diretamente a variável transformada em fator
     ggplot2::aes(x = prevalence, y = variable, fill = group)
   ) +
     ggplot2::geom_col(position = "dodge") +
-    ggplot2::scale_fill_manual(values = class_colors) + # Aplica as cores manuais
+    ggplot2::scale_fill_manual(values = class_colors) +
     ggplot2::labs(
-      title = "Prevalence of Top Biomarkers",
+      title = plot_title,
       x = "Prevalence (Fraction of Samples)",
       y = NULL,
       fill = target_var
@@ -416,32 +484,54 @@ plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L)
 #' Combines SHAP importance and prevalence information into a single figure.
 #'
 #' @param data The data.frame used for SHAP.
-#' @param global_importance Global importance data.frame.
+#' @param global_importance Global importance data.frame or per-model importance
+#'   table.
 #' @param target_var Character. Name of the target variable.
 #' @param top_n Integer. Number of top features to show (default 20).
 #' @param class_of_interest Character.
 #' @param negative_class Character.
 #' @param metric_name Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").
+#' @param model Character or \code{NULL}. Optional model name for isolated
+#'   biomarker interpretation.
 #'
 #' @return A \code{patchwork} object.
 #'
 #' @export
 plotBiomarkerIntegrated <- function(data, global_importance, target_var,
                                     top_n = 20L, class_of_interest, negative_class,
-                                    metric_name = "Spearman") {
+                                    metric_name = "Spearman", model = NULL) {
 
-  p1 <- plotShapGlobal(global_importance, target_var, class_of_interest, negative_class, top_n, metric_name) +
-    ggplot2::labs(title = paste0("SHAP Consensus (", metric_name, ")"), subtitle = NULL)
+  p1 <- plotShapGlobal(
+    global_importance = global_importance,
+    target_var = target_var,
+    class_of_interest = class_of_interest,
+    negative_class = negative_class,
+    top_n = top_n,
+    metric_name = metric_name,
+    model = model
+  ) +
+    ggplot2::labs(subtitle = NULL)
 
-  p2 <- plotTaxaPrevalence(data, global_importance, target_var, top_n) +
+  p2 <- plotTaxaPrevalence(
+    data = data,
+    global_importance = global_importance,
+    target_var = target_var,
+    top_n = top_n,
+    model = model
+  ) +
     ggplot2::labs(title = "Group Prevalence", subtitle = NULL) +
     ggplot2::theme(axis.text.y = ggplot2::element_blank())
 
-  # Combine using patchwork
+  annotation_title <- if (is.null(model)) {
+    "Integrated Biomarker Interpretation"
+  } else {
+    paste0("Integrated Biomarker Interpretation: ", model)
+  }
+
   combined <- p1 + p2 +
     patchwork::plot_layout(widths = c(1, 0.8), guides = "collect") +
     patchwork::plot_annotation(
-      title = "Integrated Biomarker Interpretation",
+      title = annotation_title,
       subtitle = paste0("Top ", top_n, " features by SHAP importance")
     )
 
