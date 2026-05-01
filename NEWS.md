@@ -1,7 +1,17 @@
+## RUMBLE 2.0.0
+
+* **Mandatory `shap_data` Parameter:** The `shap_data` parameter is now mandatory and must be explicitly specified by the user. Previously, it defaulted to `"all"`. This change enforces conscious methodological decision-making: users must now choose between `"train"` (recommended for biomarker discovery), `"test"` (for prediction-focused analysis), or `"all"` (for maximum statistical power). This ensures greater methodological rigor and transparency in analytical objectives.
+
+## RUMBLE 1.0.0
+
+### Major Changes & New Features
+* **Integrated Differential Abundance (DA):** Added `run_da` and `da_method` parameters to the main `RUMBLE()` interface. The pipeline now validates complex machine learning predictive patterns with classical DA methods (Wilcoxon, ANCOM-BC, or ALDEx2).
+* **Total Interpretability Mode:** Changed the default value of `shap_data` to `"all"` (previously `"test"`). This maximizes statistical power for SHAP calculations and ensures perfect biological alignment between SHAP importance, group prevalence, and DA Log2FC.
+* **Optimized Defaults:** Adjusted default `shap_reps` to `25` (down from 100), providing an optimal out-of-the-box balance between feature ranking stability and computation time.
+
 ## RUMBLE 0.99.0
 
 ### Reviewer-oriented improvements
-
 * Added `shap_model` to the main `RUMBLE()` interface so reviewers and users can inspect SHAP results either as global consensus or isolated by selected model.
 * Added model-specific SHAP, beeswarm, prevalence, and integrated biomarker plots for every model retained after `metric_cutoffs`.
 * Added `selected_models` to the return object to make the interpretability inclusion rule explicit and auditable.
@@ -11,10 +21,9 @@
 * Expanded automated tests to cover model-specific SHAP outputs, consensus-only mode, and invalid `shap_model` values.
 * Rewrote the `README.md` to make installation, quick validation, reviewer inspection, and expected outputs clearer.
 
-## Initial Bioconductor submission
+## RUMBLE 0.1.0
 
 ### New features
-
 * Complete consensus machine learning pipeline for microbiome biomarker discovery (`RUMBLE()`).
 * Accepts both `phyloseq` objects and count matrices as input (`prepareData()`).
 * Four classification algorithms: Random Forest, XGBoost, Elastic Net, and KNN, all via `tidymodels`.

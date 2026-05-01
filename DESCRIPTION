@@ -1,7 +1,7 @@
 Package: RUMBLE
 Type: Package
 Title: Robust Unified Microbiome Biomarker Learning Engine
-Version: 0.99.0
+Version: 2.0.0
 Authors@R: 
     person("Lucas", "Fett", email = "lucas.fett2021@gmail.com",
            role = c("aut", "cre"),
@@ -12,7 +12,10 @@ Description: RUMBLE implements a consensus machine learning framework for
     tidymodels ecosystem, and provides model-agnostic interpretability 
     through SHAP values and permutation importance (via DALEX). It handles 
     compositional microbiome data using centered log-ratio (CLR) 
-    transformations.
+    transformations. Version 1.0 introduces differential abundance analysis
+    integration with ANCOM-BC and ALDEx2 methods, enabling rigorous validation
+    of biomarker candidates with FDR control and comprehensive three-panel
+    integrated visualizations suitable for publication.
 License: GPL-3
 Encoding: UTF-8
 LazyData: false
@@ -30,12 +33,12 @@ Imports:
     DALEX,
     doParallel,
     dplyr,
-    fastshap,
     furrr,
     future,
     ggbeeswarm,
     ggplot2,
     ggsci,
+    magrittr,
     methods,
     microbiome,
     parallel,
@@ -52,12 +55,15 @@ Imports:
     themis,
     tidyr,
     tune,
-    vegan,
     viridis,
     withr,
     workflows,
     yardstick
 Suggests:
+    ANCOMBC,
+    ALDEx2,
+    TreeSummarizedExperiment,
+    fastshap,
     BiocStyle,
     knitr,
     rmarkdown,

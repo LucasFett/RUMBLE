@@ -49,14 +49,19 @@
 #'   reduce this to 10. For Meta-Analysis or Critical Study, consider 50 or higher.
 #' @param top_n Integer. Number of top features to display in
 #'   interpretability plots (default 20).
+#' @param shap_data Character. Which data to use for SHAP calculation and prevalence plotting.
+#'   This parameter is mandatory and must be explicitly specified by the user.
+#'   Options are \code{"train"} (recommended for biomarker discovery, uses training data),
+#'   \code{"test"} (for prediction-focused analysis), or \code{"all"} (uses entire dataset).
+#'   The choice reflects the analytical objective: use \code{"train"} to map what the model
+#'   learned during training, \code{"test"} for held-out performance evaluation, or
+#'   \code{"all"} for maximum statistical power in exploratory analysis.
 #' @param shap_reps Integer. Number of repetitions for SHAP and
-#'   permutation importance calculations (default 100).
+#'   permutation importance calculations (default 25).
 #'   Higher values provide more stable feature importance rankings.
-#'   The default value (100) is recommended for publication-quality results.
-#'   Feature rankings may vary by ±5% between runs at this level.
-#'   For quick exploratory analysis, you may reduce this to 10 (feature rankings
-#'   may vary by ±20%). For critical studies or meta-analyses, consider 1000
-#'   repetitions (feature rankings stable to ±1%).
+#'   The default value (25) offers an excellent balance between robustness
+#'   and computation time. For critical studies or meta-analyses, consider 100
+#'   or more repetitions.
 #'   \strong{Note:} This parameter significantly affects computation time.
 #' @param shap_method Character. Method for SHAP calculation. Options are
 #'   \code{"exact"} (default, uses DALEX for rigorous SHAP values) or
@@ -92,11 +97,10 @@
 #'   names matching common unclassified patterns (default
 #'   \code{FALSE}).
 #' @param normalization_method Character. Method for compositional normalization.
-#'   Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
-#'   (Robust CLR). The rCLR method preserves the zero structure of the data
-#'   and is more robust to pseudocount artifacts, making it suitable for
-#'   tree-based algorithms. Default is \code{"clr"} to maintain compatibility
-#'   with classical microbiome literature.
+#'   Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
+#'   The CLR transformation is recommended for all machine learning
+#'   algorithms (Random Forest, XGBoost, KNN, ENET) as it preserves mathematical monotonicity
+#'   and ensures proper feature importance calculations via SHAP values.
 #' @param seed Integer. Random seed for reproducibility (default 42).
 #' @param verbose Logical. Whether to print progress messages (default TRUE).
 #' @param metric_cutoffs Named numeric vector. Optional quality filter for models
@@ -105,8 +109,14 @@
 #'   \code{metric_cutoffs = c("roc_auc" = 0.75, "f_meas" = 0.60)}.
 #'   Default is \code{NULL} (no filtering). This parameter ensures that only
 #'   high-quality models contribute to the consensus biomarker ranking.
+#' @param run_da Logical. Whether to run differential abundance analysis
+#'   (default \code{TRUE}). When \code{TRUE}, the integrated biomarker plots
+#'   will include a third panel with differential abundance metrics (Log2FC).
+#' @param da_method Character. Differential abundance method to use.
+#'   Options are \code{"wilcoxon"} (default fallback requiring no Bioconductor dependencies),
+#'   \code{"ancombc"}, or \code{"aldex2"}. Only used if \code{run_da = TRUE}.
 #'
-#' @return A named list with six elements:
+#' @return A named list with seven elements:
 #'   \itemize{
 #'     \item \code{models}: Named list of fitted model objects and predictions.
 #'     \item \code{metrics}: Data.frame summarising performance metrics.
@@ -116,8 +126,9 @@
 #'     \item \code{data}: List with train and test data.frames.
 #'     \item \code{selected_models}: Character vector of models used for
 #'       interpretability after applying \code{metric_cutoffs}.
+#'     \item \code{da_results}: Data.frame with differential abundance results
+#'       (if \code{run_da = TRUE}), or \code{NULL} otherwise.
 #'   }
-#'
 #' @examples
 #'   # Load example data provided by the package
 #'   ps_path <- system.file("extdata",
@@ -127,7 +138,7 @@
 #'   if (file.exists(ps_path)) {
 #'     ps <- readRDS(ps_path)
 #'
-#'     # EXAMPLE 1: Quick exploratory analysis Run pipeline with minimal parameters for demonstration speed
+#'     # EXAMPLE 1: Run pipeline with minimal parameters for demonstration speed
 #'     # In real analysis, use defaults
 #'     results <- RUMBLE(
 #'       input = ps,
@@ -140,7 +151,10 @@
 #'       grid_size = 2,   # Reduced for example speed
 #'       shap_reps = 1,   # Reduced for example speed
 #'       n_cores = 1,
-#'       verbose = FALSE
+#'       verbose = FALSE,
+#'       shap_data = "train",
+#'       xgb_trees = 5,
+#'       rf_trees = 5
 #'     )
 #'
 #'     # Inspect results
@@ -161,6 +175,7 @@
 #'       # shap_reps = 100 (stable feature importance)
 #'       # xgb_trees = 1000 (optimal XGBoost performance)
 #'       n_cores = 1,
+#'       shap_data = "train",
 #'       verbose = TRUE
 #'     )
 #'
@@ -184,7 +199,7 @@ RUMBLE <- function(input,
                    cv_folds = 5L,
                    grid_size = 30L,
                    top_n = 20L,
-                   shap_reps = 100L,
+                   shap_reps = 25L,
                    xgb_trees = 1000L,
                    rf_trees = 500L,
                    min_prevalence = 0.05,
@@ -193,14 +208,28 @@ RUMBLE <- function(input,
                    normalization_method = "clr",
                    seed = 42L,
                    verbose = TRUE,
-                   shap_data = "test",
+                   shap_data,
                    shap_method = "exact",
                    shap_model = "all",
-                   metric_cutoffs = NULL) {
+                   metric_cutoffs = NULL,
+                   run_da = TRUE,
+                   da_method = c("wilcoxon", "ancombc", "aldex2")) {
 
   msg <- function(...) {
     if (verbose) message(...)
   }
+
+  RNGkind("L'Ecuyer-CMRG")
+  set.seed(seed)
+
+  if (missing(shap_data)) {
+    stop("Parameter 'shap_data' is mandatory. Please specify one of: ",
+         "'train' (recommended for biomarker discovery), ",
+         "'test' (for prediction-focused analysis), or ",
+         "'all' (for maximum statistical power).")
+  }
+  # Validate da_method parameter
+  da_method <- match.arg(da_method)
 
   ## ==================================================================
   ## 1. Data preparation
@@ -221,6 +250,9 @@ RUMBLE <- function(input,
     verbose = verbose
   )
 
+  # Store filtered_counts for later use in plotting and DA analysis
+  filtered_counts <- prep$filtered_counts
+
   ## Build analysis data.frame
   if (!outcome_var %in% colnames(prep$metadata)) {
     stop("Variable '", outcome_var,
@@ -232,10 +264,14 @@ RUMBLE <- function(input,
   analysis_df <- prep$features
   analysis_df[[outcome_var]] <- prep$metadata[[outcome_var]]
 
-  ## Remove samples with NA in outcome
+  ## Remove samples with NA in outcome (CRITICAL FIX: Synchronize all dataframes)
+  valid_idx <- !is.na(analysis_df[[outcome_var]])
   n_before <- nrow(analysis_df)
-  analysis_df <- analysis_df[!is.na(analysis_df[[outcome_var]]), ,
-                             drop = FALSE]
+
+  analysis_df <- analysis_df[valid_idx, , drop = FALSE]
+  filtered_counts <- filtered_counts[valid_idx, , drop = FALSE]
+  prep$metadata <- prep$metadata[valid_idx, , drop = FALSE]
+
   n_after <- nrow(analysis_df)
 
   if (n_before > n_after) {
@@ -276,12 +312,37 @@ RUMBLE <- function(input,
     levels = c(negative_class, class_of_interest)
   )
 
+  prep$metadata[[outcome_var]] <- analysis_df[[outcome_var]]
+
   msg("Reordered factor levels: '", negative_class, "' (reference) vs '",
       class_of_interest, "' (class of interest)")
 
   msg("Target: '", outcome_var, "' (",
       negative_class, " vs ", class_of_interest, ")")
   msg("Samples for analysis: ", nrow(analysis_df))
+
+  ## ==================================================================
+  ## 1.5 Differential Abundance Analysis
+  ## ==================================================================
+  da_results <- NULL
+
+  if (run_da) {
+    msg("[1.5/5] Running differential abundance analysis (", da_method, ")...")
+
+    # Run DA analysis (directly using the properly formatted prep$metadata)
+    da_results <- runDifferentialAbundance(
+      counts = filtered_counts,
+      metadata = prep$metadata,
+      target_var = outcome_var,
+      method = da_method,
+      verbose = verbose
+    )
+
+    msg("Differential abundance analysis complete. Found ",
+        nrow(da_results), " features.")
+  } else {
+    msg("Skipping differential abundance analysis (run_da = FALSE)")
+  }
 
   ## ==================================================================
   ## 2. Train / test split
@@ -298,6 +359,7 @@ RUMBLE <- function(input,
   ## 3. Model training & tuning
   ## ==================================================================
   msg("[3/5] Building and tuning models...")
+  set.seed(seed)
   recipe <- .buildRecipe(train_data, outcome_var,
                          balance_classes = TRUE)
   workflows <- .buildWorkflows(recipe, xgb_trees = xgb_trees, rf_trees = rf_trees)
@@ -312,6 +374,7 @@ RUMBLE <- function(input,
   ## 4. Evaluation
   ## ==================================================================
   msg("[4/5] Evaluating models on test set...")
+  set.seed(seed)
   final_models <- .evaluateModels(
     tuned, train_data, test_data, outcome_var
   )
@@ -382,14 +445,17 @@ RUMBLE <- function(input,
   msg("[5/5] Computing feature importance...")
 
   # Determine which data to use for SHAP predictions
-  if (shap_data == "test") {
+  if (shap_data == "all") {
+    prediction_data <- analysis_df
+    msg("Using ALL samples for SHAP interpretation (default, maximum power)")
+  } else if (shap_data == "test") {
     prediction_data <- test_data
-    msg("Using TEST set for SHAP interpretation (default)")
+    msg("Using TEST set for SHAP interpretation")
   } else if (shap_data == "train") {
     prediction_data <- train_data
     msg("Using TRAIN set for SHAP interpretation")
   } else {
-    stop("Invalid 'shap_data' parameter. Use 'test' or 'train'.")
+    stop("Invalid 'shap_data' parameter. Use 'all', 'test', or 'train'.")
   }
 
   selected_shap_models <- names(explainable_models)
@@ -435,13 +501,31 @@ RUMBLE <- function(input,
   ## ==================================================================
   msg("Generating plots...")
 
+  # Sincroniza as amostras dos gráficos com as amostras usadas no SHAP
+  plot_samples <- rownames(prediction_data)
+  plot_filtered_counts <- filtered_counts[plot_samples, , drop = FALSE]
+  plot_metadata <- prep$metadata[plot_samples, , drop = FALSE]
+
+  msg("Generating integrated data tables...")
+  # Extração da Tabela Integrada (Consensus)
+  integrated_table_consensus <- getIntegratedBiomarkerTable(
+    filtered_counts = plot_filtered_counts,
+    metadata = plot_metadata,
+    global_importance = importance$global_importance$spearman,
+    target_var = outcome_var,
+    top_n = top_n,
+    class_of_interest = class_of_interest,
+    negative_class = negative_class,
+    da_results = da_results,
+    metric_name = "Spearman",
+    min_abundance = min_abundance
+  )
+
   model_specific_plots <- list(
     shap_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
-    shap_mean = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
     shap_beeswarm = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
     shap_prevalence = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
-    biomarker_integrated_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
-    biomarker_integrated_mean = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot)
+    biomarker_integrated_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot)
   )
 
   if (length(shap_models_to_plot) > 0L) {
@@ -455,47 +539,35 @@ RUMBLE <- function(input,
         metric_name = "Spearman",
         model = model_name
       )
-      model_specific_plots$shap_mean[[model_name]] <- plotShapGlobal(
-        importance$shap_top$mean_shap,
-        outcome_var,
-        class_of_interest = class_of_interest,
-        negative_class = negative_class,
-        top_n = top_n,
-        metric_name = "Mean SHAP",
-        model = model_name
-      )
+
       model_specific_plots$shap_beeswarm[[model_name]] <- plotShapBeeswarm(
         importance$shap_raw,
         top_n = top_n,
         model = model_name
       )
       model_specific_plots$shap_prevalence[[model_name]] <- plotTaxaPrevalence(
-        prediction_data,
-        importance$shap_top$spearman,
+        filtered_counts = plot_filtered_counts,
+        metadata = plot_metadata,
+        global_importance = importance$shap_top$spearman,
         target_var = outcome_var,
+        min_abundance = min_abundance,
         top_n = top_n,
         model = model_name
       )
       model_specific_plots$biomarker_integrated_spearman[[model_name]] <- plotBiomarkerIntegrated(
-        prediction_data,
-        importance$shap_top$spearman,
+        filtered_counts = plot_filtered_counts,
+        metadata = plot_metadata,
+        global_importance = importance$shap_top$spearman,
         target_var = outcome_var,
         top_n = top_n,
         class_of_interest = class_of_interest,
         negative_class = negative_class,
+        da_results = da_results,
         metric_name = "Spearman",
+        min_abundance = min_abundance,
         model = model_name
       )
-      model_specific_plots$biomarker_integrated_mean[[model_name]] <- plotBiomarkerIntegrated(
-        prediction_data,
-        importance$shap_top$mean_shap,
-        target_var = outcome_var,
-        top_n = top_n,
-        class_of_interest = class_of_interest,
-        negative_class = negative_class,
-        metric_name = "Mean SHAP",
-        model = model_name
-      )
+
     }
   }
 
@@ -510,34 +582,31 @@ RUMBLE <- function(input,
       top_n = top_n,
       metric_name = "Spearman"
     ),
-    shap_mean = plotShapGlobal(
-      importance$global_importance$mean_shap, outcome_var,
-      class_of_interest = class_of_interest,
-      negative_class = negative_class,
-      top_n = top_n,
-      metric_name = "Mean SHAP"
-    ),
+
     shap_beeswarm = plotShapBeeswarm(
       importance$shap_raw, top_n = top_n
     ),
     shap_prevalence = plotTaxaPrevalence(
-      prediction_data, importance$global_importance$spearman,
-      target_var = outcome_var, top_n = top_n
+      filtered_counts = plot_filtered_counts,
+      metadata = plot_metadata,
+      global_importance = importance$global_importance$spearman,
+      target_var = outcome_var,
+      min_abundance = min_abundance,
+      top_n = top_n
     ),
     biomarker_integrated_spearman = plotBiomarkerIntegrated(
-      prediction_data, importance$global_importance$spearman,
-      target_var = outcome_var, top_n = top_n,
+      filtered_counts = plot_filtered_counts,
+      metadata = plot_metadata,
+      global_importance = importance$global_importance$spearman,
+      target_var = outcome_var,
+      top_n = top_n,
       class_of_interest = class_of_interest,
       negative_class = negative_class,
-      metric_name = "Spearman"
+      da_results = da_results,
+      metric_name = "Spearman",
+      min_abundance = min_abundance
     ),
-    biomarker_integrated_mean = plotBiomarkerIntegrated(
-      prediction_data, importance$global_importance$mean_shap,
-      target_var = outcome_var, top_n = top_n,
-      class_of_interest = class_of_interest,
-      negative_class = negative_class,
-      metric_name = "Mean SHAP"
-    ),
+
     perm_heat = plotPermutationHeatmap(
       importance$permutation_top
     ),
@@ -558,9 +627,9 @@ RUMBLE <- function(input,
     msg("Saving outputs to: ", output_dir)
 
     ## Plots
-    plot_names <- c("metrics", "roc", "cm", "shap_spearman", "shap_mean",
+    plot_names <- c("metrics", "roc", "cm", "shap_spearman",
                     "shap_beeswarm", "shap_prevalence",
-                    "biomarker_integrated_spearman", "biomarker_integrated_mean", "perm_heat")
+                    "biomarker_integrated_spearman", "perm_heat")
 
     # Define sizes (width, height)
     plot_sizes <- list(
@@ -568,11 +637,9 @@ RUMBLE <- function(input,
       roc                           = c(8, 5),
       cm                            = c(10, 8),
       shap_spearman                 = c(9, 8),
-      shap_mean                     = c(9, 8),
       shap_beeswarm                 = c(10, 8),
       shap_prevalence               = c(9, 8),
       biomarker_integrated_spearman = c(12, 9),
-      biomarker_integrated_mean     = c(12, 9),
       perm_heat                     = c(9, 8)
     )
 
@@ -596,11 +663,7 @@ RUMBLE <- function(input,
           plot = plots$model_specific$shap_spearman[[model_name]],
           width = 9, height = 8, dpi = 300
         )
-        ggplot2::ggsave(
-          filename = paste0(prefix, "_", model_slug, "_shap_mean.png"),
-          plot = plots$model_specific$shap_mean[[model_name]],
-          width = 9, height = 8, dpi = 300
-        )
+
         ggplot2::ggsave(
           filename = paste0(prefix, "_", model_slug, "_shap_beeswarm.png"),
           plot = plots$model_specific$shap_beeswarm[[model_name]],
@@ -616,11 +679,7 @@ RUMBLE <- function(input,
           plot = plots$model_specific$biomarker_integrated_spearman[[model_name]],
           width = 12, height = 9, dpi = 300
         )
-        ggplot2::ggsave(
-          filename = paste0(prefix, "_", model_slug, "_biomarker_integrated_mean.png"),
-          plot = plots$model_specific$biomarker_integrated_mean[[model_name]],
-          width = 12, height = 9, dpi = 300
-        )
+
       }
     }
 
@@ -633,18 +692,29 @@ RUMBLE <- function(input,
       importance$global_importance$spearman,
       paste0(prefix, "_shap_global_spearman.tsv")
     )
+    # >>> ADICIONE ESTAS LINHAS ABAIXO <<<
     readr::write_tsv(
-      importance$global_importance$mean_shap,
-      paste0(prefix, "_shap_global_mean_shap.tsv")
+      integrated_table_consensus,
+      paste0(prefix, "_integrated_biomarkers.tsv")
     )
+
+    if (run_da && !is.null(da_results)) {
+      # Filtra os resultados de DA apenas para os Top Táxons
+      top_da_results <- da_results %>%
+        dplyr::filter(Taxon %in% integrated_table_consensus$Taxon)
+
+      readr::write_tsv(
+        top_da_results,
+        paste0(prefix, "_top_differential_abundance.tsv")
+      )
+    }
+    # >>> FIM DA ADIÇÃO <<<
+
     readr::write_tsv(
       importance$shap_top$spearman,
       paste0(prefix, "_shap_model_spearman.tsv")
     )
-    readr::write_tsv(
-      importance$shap_top$mean_shap,
-      paste0(prefix, "_shap_model_mean_shap.tsv")
-    )
+
     readr::write_tsv(
       importance$permutation_top,
       paste0(prefix, "_permutation_top.tsv")
@@ -660,11 +730,13 @@ RUMBLE <- function(input,
   msg("======================================================")
 
   list(
-    models     = final_models,
-    metrics    = metrics_summary,
-    importance = importance,
-    plots      = plots,
-    data       = list(train = train_data, test = test_data),
-    selected_models = selected_shap_models
+    models          = final_models,
+    metrics         = metrics_summary,
+    importance      = importance,
+    plots           = plots,
+    data            = list(train = train_data, test = test_data),
+    selected_models = selected_shap_models,
+    da_results      = da_results,
+    integrated_table = integrated_table_consensus # <--- Adicione esta linha
   )
 }

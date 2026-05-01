@@ -4,8 +4,9 @@
 #'
 #' @param final_models List of model results from the pipeline. Each element
 #'   must contain a \code{model_fit} component (the fitted workflow).
-#' @param train_data Training data.frame (features + target).
+#' @param data Training data.frame (features + target).
 #' @param target_var Name of the target variable.
+#' @param class_of_interest Character. The class of interest for SHAP values.
 #'
 #' @return A list of DALEX explainer objects, one for each model.
 #'
@@ -359,37 +360,14 @@ computeFeatureImportance <- function(explainers,
   global_importance_spearman <- shap %>%
     dplyr::group_by(variable) %>%
     dplyr::summarise(
-      mean_shap = mean(abs(contribution), na.rm = TRUE),
+      mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
       direction = suppressWarnings(sign(stats::cor(feature_value, contribution, method = "spearman"))),
       n_models  = dplyr::n_distinct(model),
       .groups   = "drop"
     ) %>%
-    dplyr::arrange(dplyr::desc(mean_shap))
+    dplyr::arrange(dplyr::desc(mean_abs_contribution))
 
-  ## --- 3.2 Mean SHAP Metric ---
-  ## Top SHAP (Mean SHAP)
-  top_shap_mean <- shap %>%
-    dplyr::group_by(model, variable) %>%
-    dplyr::summarize(
-      mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
-      direction = mean(sign(contribution), na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    dplyr::arrange(model, dplyr::desc(mean_abs_contribution)) %>%
-    dplyr::group_by(model) %>%
-    dplyr::slice_head(n = top_n) %>%
-    dplyr::ungroup()
 
-  ## Global consensus (Mean SHAP)
-  global_importance_mean <- shap %>%
-    dplyr::group_by(variable) %>%
-    dplyr::summarise(
-      mean_shap = mean(abs(contribution), na.rm = TRUE),
-      direction = mean(sign(contribution), na.rm = TRUE),
-      n_models  = dplyr::n_distinct(model),
-      .groups   = "drop"
-    ) %>%
-    dplyr::arrange(dplyr::desc(mean_shap))
 
   msg("Feature importance analysis complete.")
 
@@ -398,12 +376,10 @@ computeFeatureImportance <- function(explainers,
     permutation_top = top_perm,
     shap_raw = shap,
     shap_top = list(
-      spearman = top_shap_spearman,
-      mean_shap = top_shap_mean
+      spearman = top_shap_spearman
     ),
     global_importance = list(
-      spearman = global_importance_spearman,
-      mean_shap = global_importance_mean
+      spearman = global_importance_spearman
     )
   )
 }

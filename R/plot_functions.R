@@ -9,6 +9,7 @@
 #'
 #' @import ggplot2
 #' @importFrom ggsci scale_fill_nejm scale_color_nejm
+#' @importFrom stats reorder setNames
 #' @importFrom viridis scale_fill_viridis
 #' @importFrom rlang sym
 #' @importFrom dplyr group_by summarize mutate left_join pull filter
@@ -98,14 +99,11 @@ plotRocCurves <- function(final_models, target_var) {
   }
 
   score_col <- NULL
-  if ("mean_shap" %in% colnames(importance_df)) {
-    score_col <- "mean_shap"
-  }
-  if (is.null(score_col) && "mean_abs_contribution" %in% colnames(importance_df)) {
+  if ("mean_abs_contribution" %in% colnames(importance_df)) {
     score_col <- "mean_abs_contribution"
   }
   if (is.null(score_col)) {
-    stop("Importance table must contain either 'mean_shap' or 'mean_abs_contribution'.")
+    stop("Importance table must contain 'mean_abs_contribution'.")
   }
 
   has_model <- "model" %in% colnames(importance_df)
@@ -143,13 +141,12 @@ plotRocCurves <- function(final_models, target_var) {
 #'
 #' @param global_importance A data.frame from
 #'      \code{\link{computeFeatureImportance}} containing columns
-#'      \code{variable}, \code{direction}, and either \code{mean_shap}
-#'      (consensus tables) or \code{mean_abs_contribution} (per-model tables).
+#'      \code{variable}, \code{direction}, and \code{mean_abs_contribution}.
 #' @param target_var Character. Name of the target variable.
 #' @param class_of_interest Character. Label of the class of interest.
 #' @param negative_class Character. Label of the negative/reference class.
 #' @param top_n Integer. Number of top features to display (default 20).
-#' @param metric_name Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").
+#' @param metric_name Character. Name of the metric used (e.g., "Spearman").
 #' @param model Character or \code{NULL}. Optional model name for isolated
 #'   plots when \code{global_importance} contains a \code{model} column.
 #'
@@ -203,7 +200,7 @@ plotShapGlobal <- function(global_importance, target_var,
     ) +
     ggplot2::labs(
       x = NULL,
-      y = paste0("Mean SHAP contribution (", metric_name, ")"),
+      y = paste0("SHAP contribution (", metric_name, ")"),
       title = plot_title,
       subtitle = paste0(
         target_var, ": <- ", negative_class,
@@ -410,11 +407,20 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L, model = NULL) {
 #' Plot Taxa Prevalence for Top SHAP Features
 #'
 #' Displays the prevalence of top SHAP features in the dataset.
+#' This function uses raw/relative abundance data (filtered_counts) to calculate
+#' true prevalence, avoiding artifacts from CLR transformation.
 #'
-#' @param data The data.frame used for SHAP (test or train).
+#' @param filtered_counts A data.frame of raw or relative abundances (before CLR/rCLR
+#'   transformation) with samples as rows and taxa as columns. This should be the
+#'   \code{filtered_counts} element from \code{prepareData()}.
+#' @param metadata A data.frame with sample metadata, including the target variable.
+#'   Rownames should match the sample identifiers in \code{filtered_counts}.
 #' @param global_importance Global importance data.frame or per-model importance
 #'   table.
 #' @param target_var Character. Name of the target variable.
+#' @param min_abundance Numeric. Minimum relative abundance threshold to
+#'   consider a taxon as present in a sample (default 0.0001). Not used directly if
+#'   filtered_counts are raw counts, but kept for compatibility.
 #' @param top_n Integer. Number of top features to show (default 20).
 #' @param model Character or \code{NULL}. Optional model name for isolated
 #'   prevalence plots when \code{global_importance} contains a \code{model}
@@ -423,8 +429,9 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L, model = NULL) {
 #' @return A \code{ggplot} object.
 #'
 #' @export
-plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L,
-                               model = NULL) {
+plotTaxaPrevalence <- function(filtered_counts, metadata, global_importance,
+                               target_var, min_abundance = 0.0001,
+                               top_n = 20L, model = NULL) {
   top_taxa_df <- .selectImportanceTable(global_importance, model = model) %>%
     dplyr::arrange(dplyr::desc(importance_value)) %>%
     dplyr::slice_head(n = top_n)
@@ -432,24 +439,38 @@ plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L,
   top_taxa <- top_taxa_df$variable
   taxa_order <- top_taxa_df$variable[order(top_taxa_df$importance_value)]
 
-  X_data <- data[, !colnames(data) %in% target_var, drop = FALSE]
-  groups <- data[[target_var]]
-  has_exact_zeros <- (sum(abs(X_data) < 1e-12) / length(X_data)) > 0.05
+  # Ensure filtered_counts has the top taxa
+  available_taxa <- intersect(top_taxa, colnames(filtered_counts))
+  if (length(available_taxa) == 0) {
+    stop("No top taxa found in filtered_counts. Check taxon names.")
+  }
 
+  # Extract subset of data
+  X_data <- filtered_counts[, available_taxa, drop = FALSE]
+  groups <- metadata[[target_var]]
+
+  # CRITICAL FIX: Ensure groups is a factor so levels() works
+  if (!is.factor(groups)) {
+    groups <- factor(groups)
+  }
+
+  # Ensure alignment
+  if (length(groups) != nrow(X_data)) {
+    stop("Number of samples in filtered_counts and metadata must match.")
+  }
+
+  # Calculate prevalence
   prev_list <- lapply(levels(groups), function(lvl) {
     idx <- which(groups == lvl)
     X_group <- X_data[idx, , drop = FALSE]
-    subset_data <- X_group[, top_taxa, drop = FALSE]
 
-    if (has_exact_zeros) {
-      presence_matrix <- abs(subset_data) > 1e-12
-    } else {
-      full_row_mins <- apply(X_group, 1, min)
-      presence_matrix <- sweep(subset_data, 1, full_row_mins + 1e-6, ">")
-    }
-
+    presence_matrix <- X_group > 0
     prev <- colMeans(presence_matrix)
-    data.frame(variable = names(prev), prevalence = prev, group = lvl)
+
+    data.frame(variable = names(prev),
+               prevalence = as.numeric(prev),
+               group = lvl,
+               stringsAsFactors = FALSE)
   })
 
   df_prev <- dplyr::bind_rows(prev_list)
@@ -479,63 +500,217 @@ plotTaxaPrevalence <- function(data, global_importance, target_var, top_n = 20L,
 }
 
 
-#' Plot Integrated Biomarker Interpretation
+#' Plot Integrated Biomarker Interpretation (Dashboard Style)
 #'
-#' Combines SHAP importance and prevalence information into a single figure.
+#' Generates a 4-panel visualization dissecting the consensus biomarkers:
+#' \itemize{
+#'   \item \strong{Panel A:} ML Importance (Median Abs SHAP, colored by direction).
+#'   \item \strong{Panel B:} Taxa Prevalence across groups.
+#'   \item \strong{Panel C:} Biological Effect Size (Log2 Fold-Change).
+#'   \item \strong{Panel D:} Statistical Significance (-log10 FDR).
+#' }
 #'
-#' @param data The data.frame used for SHAP.
-#' @param global_importance Global importance data.frame or per-model importance
-#'   table.
-#' @param target_var Character. Name of the target variable.
-#' @param top_n Integer. Number of top features to show (default 20).
-#' @param class_of_interest Character.
-#' @param negative_class Character.
-#' @param metric_name Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").
-#' @param model Character or \code{NULL}. Optional model name for isolated
-#'   biomarker interpretation.
+#' @param filtered_counts A numeric matrix of counts (taxa as columns).
+#' @param metadata A data.frame with sample metadata.
+#' @param global_importance A data.frame with consensual feature importance.
+#' @param target_var Character. Name of the outcome variable.
+#' @param top_n Integer. Number of top features to include.
+#' @param class_of_interest Character. Label of the class of interest.
+#' @param negative_class Character. Label of the reference class.
+#' @param da_results A data.frame with differential abundance results. Optional.
+#' @param metric_name Character. Feature importance metric name (e.g., "Spearman").
+#' @param min_abundance Numeric. Threshold for prevalence calculation.
+#' @param model Character. Optional model name to plot model-specific SHAP.
+#' @param verbose Logical. Print messages.
 #'
-#' @return A \code{patchwork} object.
-#'
+#' @return A patchworked ggplot object.
 #' @export
-plotBiomarkerIntegrated <- function(data, global_importance, target_var,
-                                    top_n = 20L, class_of_interest, negative_class,
-                                    metric_name = "Spearman", model = NULL) {
+plotBiomarkerIntegrated <- function(filtered_counts,
+                                    metadata,
+                                    global_importance,
+                                    target_var,
+                                    top_n = 20,
+                                    class_of_interest,
+                                    negative_class,
+                                    da_results = NULL,
+                                    metric_name = "Spearman",
+                                    min_abundance = 0.0001,
+                                    model = NULL,
+                                    verbose = TRUE) {
 
-  p1 <- plotShapGlobal(
-    global_importance = global_importance,
-    target_var = target_var,
-    class_of_interest = class_of_interest,
-    negative_class = negative_class,
-    top_n = top_n,
-    metric_name = metric_name,
-    model = model
-  ) +
-    ggplot2::labs(subtitle = NULL)
+  msg <- function(...) { if (verbose) message(...) }
+  msg("Generating integrated biomarker dashboard plot...")
 
-  p2 <- plotTaxaPrevalence(
-    data = data,
-    global_importance = global_importance,
-    target_var = target_var,
-    top_n = top_n,
-    model = model
-  ) +
-    ggplot2::labs(title = "Group Prevalence", subtitle = NULL) +
-    ggplot2::theme(axis.text.y = ggplot2::element_blank())
+  show_da <- !is.null(da_results)
+  method_full <- ifelse(is.null(da_results$Method[1]), "DA", da_results$Method[1])
 
-  annotation_title <- if (is.null(model)) {
-    "Integrated Biomarker Interpretation"
-  } else {
-    paste0("Integrated Biomarker Interpretation: ", model)
-  }
+  # ==================================================================
+  # 1. Prepare shared taxonomic order and STRICT shared levels
+  # ==================================================================
+  importance_full <- .selectImportanceTable(global_importance, model = model)
 
-  combined <- p1 + p2 +
-    patchwork::plot_layout(widths = c(1, 0.8), guides = "collect") +
-    patchwork::plot_annotation(
-      title = annotation_title,
-      subtitle = paste0("Top ", top_n, " features by SHAP importance")
+  taxa_order <- importance_full %>%
+    dplyr::filter(variable != "TOTAL_SHAP") %>%
+    dplyr::slice_max(order_by = importance_value, n = top_n, with_ties = FALSE) %>%
+    dplyr::arrange(importance_value) %>%
+    dplyr::pull(variable)
+
+  # Força a mesma ordem de níveis para todos os painéis (Garante 1 única legenda)
+  shared_levels <- c(class_of_interest, negative_class)
+  class_colors_discrete <- stats::setNames(c("#d62728", "#1f77b4"), shared_levels)
+
+  importance_plot_data <- importance_full %>%
+    dplyr::filter(variable %in% taxa_order) %>%
+    dplyr::mutate(
+      variable = factor(variable, levels = taxa_order),
+      direction_class = ifelse(direction > 0, class_of_interest, negative_class),
+      direction_class = factor(direction_class, levels = shared_levels),
+      plot_shap_value = ifelse(direction < 0, importance_value * -1, importance_value)
     )
 
-  return(combined)
+  ## ==================================================================
+  ## Panel A: ML Importance (SHAP) - Solid Bars
+  ## ==================================================================
+  msg("  - Generating Panel A (ML Importance)...")
+
+  p_imp <- ggplot2::ggplot(importance_plot_data, ggplot2::aes(x = plot_shap_value, y = variable, fill = direction_class)) +
+    ggplot2::geom_col(color = "black", linewidth = 0.3, width = 0.7) +
+    ggplot2::labs(title = "A. ML Importance", subtitle = paste0("Abs SHAP (", metric_name, ")"), x = "SHAP Score", y = NULL) +
+    ggplot2::scale_fill_manual(values = class_colors_discrete, name = target_var, na.translate = FALSE) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.1))) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 9, face = "italic"),
+                   panel.grid.major.y = ggplot2::element_blank(),
+                   plot.title = ggplot2::element_text(size = 11, face = "bold"),
+                   plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
+                   plot.margin = ggplot2::margin(r = 5))
+
+  ## ==================================================================
+  ## Panel B: Taxa Prevalence
+  ## ==================================================================
+  msg("  - Generating Panel B (Taxa Prevalence)...")
+
+  groups <- metadata[[target_var]]
+
+  depths <- rowSums(filtered_counts)
+  depths[depths == 0] <- 1
+  rel_abund <- sweep(filtered_counts, 1, depths, "/")
+
+  avail_taxa <- intersect(taxa_order, colnames(rel_abund))
+  X_data <- rel_abund[, avail_taxa, drop = FALSE]
+
+  prev_list <- lapply(levels(factor(groups)), function(lvl) {
+    idx <- which(groups == lvl)
+    X_group <- X_data[idx, , drop = FALSE]
+    presence_matrix <- X_group > min_abundance
+    prev <- colMeans(presence_matrix)
+    data.frame(variable = names(prev),
+               prevalence = as.numeric(prev),
+               group = lvl,
+               stringsAsFactors = FALSE)
+  })
+
+  df_prev <- dplyr::bind_rows(prev_list)
+  df_prev$variable <- factor(df_prev$variable, levels = taxa_order)
+
+  # Força os níveis do Painel B a serem idênticos aos do Painel A
+  df_prev$group <- factor(df_prev$group, levels = shared_levels)
+
+  p_prev <- ggplot2::ggplot(df_prev, ggplot2::aes(x = prevalence, y = variable, fill = group)) +
+    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.8), width = 0.7, color = "black", linewidth = 0.3) +
+    ggplot2::scale_x_continuous(labels = scales::percent_format(), limits = c(0, 1), breaks = c(0, 0.5, 1), expand = c(0,0)) +
+    ggplot2::scale_fill_manual(values = class_colors_discrete, name = target_var, na.translate = FALSE) +
+    # Aqui alteramos a legenda para deixar explícito que é a abundância relativa
+    ggplot2::labs(title = "B. Prevalence", subtitle = paste0("Rel. Abund. > ", scales::percent(min_abundance, accuracy = 0.01)), x = "Fraction") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+                   axis.ticks.y = ggplot2::element_blank(),
+                   axis.title.y = ggplot2::element_blank(),
+                   panel.grid.major.y = ggplot2::element_blank(),
+                   plot.title = ggplot2::element_text(size = 11, face = "bold"),
+                   plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
+                   plot.margin = ggplot2::margin(r = 5, l = 5))
+
+  ## ==================================================================
+  ## Panel C & D: Differential Abundance (LogFC and Significance)
+  ## ==================================================================
+  if (show_da) {
+    msg("  - Generating Panels C & D (Differential Abundance)...")
+
+    da_plot_data <- da_results %>%
+      dplyr::filter(Taxon %in% taxa_order) %>%
+      dplyr::mutate(Taxon = factor(Taxon, levels = taxa_order))
+
+    da_plot_data <- da_plot_data %>%
+      dplyr::mutate(
+        direction_discrete = ifelse(logFC > 0, class_of_interest, negative_class),
+        # Força os níveis do Painel C a serem idênticos aos do Painel A e B
+        direction_discrete = factor(direction_discrete, levels = shared_levels),
+        neg_log_fdr = -log10(ifelse(adj_p_val == 0, 1e-16, adj_p_val))
+      )
+
+    # Panel C: Effect Size (Log2FC)
+    p_fc <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = logFC, y = Taxon, fill = direction_discrete)) +
+      ggplot2::geom_col(color = "black", orientation = "y", linewidth = 0.3, width = 0.7) +
+      ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+      ggplot2::labs(title = "C. Effect Size", subtitle = paste0("Log2FC (", method_full, ")"), x = "Log2 Fold-Change") +
+      ggplot2::scale_fill_manual(values = class_colors_discrete, name = target_var, na.translate = FALSE) +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+                     axis.ticks.y = ggplot2::element_blank(),
+                     axis.title.y = ggplot2::element_blank(),
+                     panel.grid.major.y = ggplot2::element_blank(),
+                     plot.title = ggplot2::element_text(size = 11, face = "bold"),
+                     plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
+                     plot.margin = ggplot2::margin(r = 5, l = 5))
+
+    # Panel D: Significance (-log10 FDR)
+    p_sig <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = neg_log_fdr, y = Taxon)) +
+      ggplot2::geom_col(fill = "gray80", color = "black", linewidth = 0.3, width = 0.7) +
+      ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "red") +
+      ggplot2::labs(title = "D. Significance", subtitle = "-log10(FDR)", x = "-log10(FDR)") +
+      ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.1))) +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+                     axis.ticks.y = ggplot2::element_blank(),
+                     axis.title.y = ggplot2::element_blank(),
+                     panel.grid.major.y = ggplot2::element_blank(),
+                     plot.title = ggplot2::element_text(size = 11, face = "bold"),
+                     plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
+                     plot.margin = ggplot2::margin(l = 5))
+
+  } else {
+    p_fc <- ggplot2::ggplot() + ggplot2::theme_void() + ggplot2::labs(title = "C. Effect Size\n(N/A)")
+    p_sig <- ggplot2::ggplot() + ggplot2::theme_void() + ggplot2::labs(title = "D. Significance\n(N/A)")
+  }
+
+  ## ==================================================================
+  ## Assemblage with Unified Theme
+  ## ==================================================================
+  msg("Assembling 4-panel dashboard plot...")
+
+  plot_list <- list(p_imp, p_prev, p_fc, p_sig)
+
+  plot_layout <- patchwork::plot_layout(widths = c(1.5, 1, 1, 0.8), guides = "collect")
+
+  annotation_title <- if (is.null(model)) {
+    "Integrated Biomarker Dashboard"
+  } else {
+    paste0("Integrated Biomarker Dashboard: ", model)
+  }
+
+  composite_plot <- patchwork::wrap_plots(plot_list) + plot_layout +
+    patchwork::plot_annotation(
+      title = annotation_title,
+      theme = ggplot2::theme(plot.title = ggplot2::element_text(size = 15, face = "bold", margin = ggplot2::margin(b = 10)))
+    ) &
+    ggplot2::theme(legend.position = "bottom",
+                   legend.box = "horizontal",
+                   legend.margin = ggplot2::margin(t = 10, b = 10),
+                   legend.text = ggplot2::element_text(size = 11),
+                   legend.title = ggplot2::element_text(size = 12, face = "bold"))
+
+  return(composite_plot)
 }
 
 
@@ -595,4 +770,90 @@ summariseMetrics <- function(final_models) {
     tidyr::pivot_wider(
       names_from = .metric, values_from = .estimate
     )
+}
+
+#' Extract Integrated Biomarker Data
+#'
+#' Builds a comprehensive data.frame containing SHAP importance, taxonomic
+#' prevalence, and differential abundance metrics for the top features. This
+#' table mirrors the data shown in the Integrated Biomarker Dashboard plot.
+#'
+#' @inheritParams plotBiomarkerIntegrated
+#'
+#' @return A data.frame with the integrated metrics.
+#' @export
+getIntegratedBiomarkerTable <- function(filtered_counts,
+                                        metadata,
+                                        global_importance,
+                                        target_var,
+                                        top_n = 20,
+                                        class_of_interest,
+                                        negative_class,
+                                        da_results = NULL,
+                                        metric_name = "Spearman",
+                                        min_abundance = 0.0001,
+                                        model = NULL) {
+
+  # 1. SHAP Importance
+  importance_full <- .selectImportanceTable(global_importance, model = model)
+
+  taxa_order <- importance_full %>%
+    dplyr::filter(variable != "TOTAL_SHAP") %>%
+    dplyr::slice_max(order_by = importance_value, n = top_n, with_ties = FALSE) %>%
+    dplyr::arrange(dplyr::desc(importance_value)) %>%
+    dplyr::pull(variable)
+
+  df_integrated <- importance_full %>%
+    dplyr::filter(variable %in% taxa_order) %>%
+    dplyr::mutate(
+      Taxon = variable,
+      Direction_Class = ifelse(direction > 0, class_of_interest, negative_class),
+      SHAP_Score = importance_value
+    ) %>%
+    dplyr::select(Taxon, SHAP_Score, Direction_Class)
+
+  # 2. Prevalence
+  groups <- metadata[[target_var]]
+  depths <- rowSums(filtered_counts)
+  depths[depths == 0] <- 1
+  rel_abund <- sweep(filtered_counts, 1, depths, "/")
+
+  avail_taxa <- intersect(df_integrated$Taxon, colnames(rel_abund))
+  X_data <- rel_abund[, avail_taxa, drop = FALSE]
+
+  prev_list <- lapply(levels(factor(groups)), function(lvl) {
+    idx <- which(groups == lvl)
+    X_group <- X_data[idx, , drop = FALSE]
+    presence_matrix <- X_group > min_abundance
+    prev <- colMeans(presence_matrix)
+    data.frame(Taxon = names(prev),
+               Prevalence = as.numeric(prev),
+               Group = lvl,
+               stringsAsFactors = FALSE)
+  })
+
+  df_prev <- dplyr::bind_rows(prev_list) %>%
+    tidyr::pivot_wider(names_from = Group, values_from = Prevalence, names_prefix = "Prevalence_")
+
+  # Merge SHAP and Prevalence
+  df_integrated <- dplyr::left_join(df_integrated, df_prev, by = "Taxon")
+
+  # 3. Differential Abundance (If available)
+  if (!is.null(da_results)) {
+    da_subset <- da_results %>%
+      dplyr::filter(Taxon %in% df_integrated$Taxon) %>%
+      dplyr::select(Taxon, logFC, p_val, adj_p_val)
+
+    df_integrated <- dplyr::left_join(df_integrated, da_subset, by = "Taxon")
+  } else {
+    df_integrated$logFC <- NA
+    df_integrated$p_val <- NA
+    df_integrated$adj_p_val <- NA
+  }
+
+  # Ensure order matches the plot (descending importance)
+  df_integrated <- df_integrated %>%
+    dplyr::arrange(match(Taxon, taxa_order))
+
+  return(df_integrated)
 }

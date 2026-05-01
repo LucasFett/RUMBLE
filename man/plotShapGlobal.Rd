@@ -17,8 +17,7 @@ plotShapGlobal(
 \arguments{
 \item{global_importance}{A data.frame from
 \code{\link{computeFeatureImportance}} containing columns
-\code{variable}, \code{direction}, and either \code{mean_shap}
-(consensus tables) or \code{mean_abs_contribution} (per-model tables).}
+\code{variable}, \code{direction}, and \code{mean_abs_contribution}.}
 
 \item{target_var}{Character. Name of the target variable.}
 
@@ -28,7 +27,7 @@ plotShapGlobal(
 
 \item{top_n}{Integer. Number of top features to display (default 20).}
 
-\item{metric_name}{Character. Name of the metric used (e.g., "Spearman" or "Mean SHAP").}
+\item{metric_name}{Character. Name of the metric used (e.g., "Spearman").}
 
 \item{model}{Character or \code{NULL}. Optional model name for isolated
 plots when \code{global_importance} contains a \code{model} column.}

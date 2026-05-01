@@ -20,7 +20,6 @@ In its current form, the package also includes a reviewer-oriented feature that 
 | Input and output structure | Expected data formats and return object |
 | Interpretability | Global consensus, per-model profiles, and metric-based filtering |
 | Exported artifacts | Files written to `output_dir` |
-| Compositional normalization | Notes on `clr` and `rclr` |
 | Reviewer checklist | How to validate the package quickly |
 | Testing and development | Automated testing and package inspection |
 
@@ -92,6 +91,7 @@ results <- RUMBLE(
   outcome_var = "ses",
   class_of_interest = "Low",
   tax_level = "Genus",
+  shap_data = "train",  # Mandatory: choose between 'train', 'test', or 'all'
   output_dir = "rumble_results",
   verbose = TRUE
 )
@@ -125,10 +125,10 @@ The table below summarizes the most relevant arguments for practical use and rev
 | Argument | Analytical role | Default |
 |---|---|---|
 | `tax_level` | Aggregates taxa at a chosen taxonomic rank | `NULL` |
-| `normalization_method` | Selects between `"clr"` and `"rclr"` | `"clr"` |
+| `normalization_method` | Currently only `"clr"` (Centered Log-Ratio) is supported | `"clr"` |
 | `grid_size` | Controls tuning intensity | `30` |
 | `shap_reps` | Number of repetitions for SHAP and permutation importance | `100` |
-| `shap_data` | Dataset used for SHAP computation (`"test"` or `"train"`) | `"test"` |
+| `shap_data` | Dataset used for SHAP computation (`"train"`, `"test"`, or `"all"`) | **Mandatory** |
 | `shap_method` | SHAP strategy (`"exact"` or `"fast"`) | `"exact"` |
 | `metric_cutoffs` | Minimum quality filter for selecting interpretable models | `NULL` |
 | `shap_model` | Controls which model-specific SHAP profiles are generated | `"all"` |
@@ -157,15 +157,9 @@ In practice, this means that the interpretability stage does not need to include
 
 Biomarker interpretation is organized at two complementary scales.
 
-The first is the **global consensus** scale, which is useful when the goal is to communicate an aggregated microbiome signature. At this level, the package returns plots such as `results$plots$shap_spearman`, `results$plots$shap_mean`, and `results$plots$biomarker_integrated_spearman`.
+The first is the **global consensus** scale, which is useful when the goal is to communicate an aggregated microbiome signature. At this level, the package returns plots such as `results$plots$shap_spearman` and `results$plots$biomarker_integrated_spearman`.
 
 The second is the **model-isolated** scale, which is essential for critical review. At this level, the package returns named lists inside `results$plots$model_specific`, making it possible to compare the behavior of `RF`, `XGB`, `ENET`, and `KNN` whenever those models pass the quality filter.
-
-### Interpreting the `shap_mean` metric
-
-It is important to emphasize that the metric based on the **mean sign of SHAP values** should not be interpreted as a direct biological relationship between abundance and outcome. It summarizes, on average, **which class the model tended to push the prediction toward when that feature contributed to the decision**, rather than whether the feature represents a biologically monotonic gradient of risk or protection.
-
-In other words, `shap_mean` is useful for reading the **average direction of the algorithmic decision**, but it should not be treated as causal biological evidence or even as a robust ecological direction by itself. For biological interpretation, the package prioritizes the **Spearman relationship between abundance and SHAP contribution**, because this preserves more directly the idea of increasing or decreasing feature abundance relative to predictive effect.
 
 ### Behavior of `shap_model`
 
@@ -247,27 +241,13 @@ When `output_dir` is defined, the package automatically writes plots and tables 
 | Artifact type | Example files |
 |---|---|
 | Global metrics | `*_model_metrics.tsv` |
-| Consensus SHAP | `*_shap_global_spearman.tsv`, `*_shap_global_mean_shap.tsv` |
-| Model-specific SHAP | `*_shap_model_spearman.tsv`, `*_shap_model_mean_shap.tsv` |
+| Consensus SHAP | `*_shap_global_spearman.tsv` |
+| Model-specific SHAP | `*_shap_model_spearman.tsv` |
 | Permutation importance | `*_permutation_top.tsv` |
 | Global figures | `*_roc.png`, `*_cm.png`, `*_shap_spearman.png` |
 | Model-specific figures | `*_RF_shap_spearman.png`, `*_XGB_shap_beeswarm.png`, and related outputs |
 
 This organization makes the output directory substantially more reviewer-friendly because direct inspection no longer depends on manual extraction from the returned object.
-
----
-
-## Compositional normalization
-
-The package supports `"clr"` and `"rclr"`. The default is `"clr"`, as it is the more conservative choice for broad methodological compatibility. The `"rclr"` option can be useful in sparse settings, particularly when preserving the zero structure of the microbiome matrix is desirable. However, the choice between these approaches can affect both model behavior and SHAP interpretation, especially for rare taxa.
-
-### Important limitation of `rclr`: monotonicity breaking
-
-Under `rclr`, true absences remain encoded as `0`, whereas low but non-zero abundances may receive **negative values** after transformation. This breaks the expected numeric monotonicity between absence, low abundance, and high abundance, because an absence may end up being represented by a numerically larger value than a transformed low abundance.
-
-In practical terms, the numerical trajectory may no longer follow the intuitive biological order. Instead of something like **absence < low abundance < high abundance**, the analyst may observe a situation in which **absence = 0** and **low abundance < 0**, which artificially suggests an abundance increase when moving from a negative value to zero. This can distort interpretations that depend on directionality or ranking, including SHAP-based interpretation.
-
-For that reason, although `rclr` is useful for preserving zeros and reducing pseudocount artifacts, it should be interpreted with caution whenever the analysis depends on **biological directionality**. In monotonicity-sensitive settings, the practical recommendation is to compare `clr` and `rclr` explicitly and verify whether the biological conclusions remain stable under both parameterizations.
 
 ---
 

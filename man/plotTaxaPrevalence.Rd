@@ -5,20 +5,31 @@
 \title{Plot Taxa Prevalence for Top SHAP Features}
 \usage{
 plotTaxaPrevalence(
-  data,
+  filtered_counts,
+  metadata,
   global_importance,
   target_var,
+  min_abundance = 1e-04,
   top_n = 20L,
   model = NULL
 )
 }
 \arguments{
-\item{data}{The data.frame used for SHAP (test or train).}
+\item{filtered_counts}{A data.frame of raw or relative abundances (before CLR/rCLR
+transformation) with samples as rows and taxa as columns. This should be the
+\code{filtered_counts} element from \code{prepareData()}.}
+
+\item{metadata}{A data.frame with sample metadata, including the target variable.
+Rownames should match the sample identifiers in \code{filtered_counts}.}
 
 \item{global_importance}{Global importance data.frame or per-model importance
 table.}
 
 \item{target_var}{Character. Name of the target variable.}
+
+\item{min_abundance}{Numeric. Minimum relative abundance threshold to
+consider a taxon as present in a sample (default 0.0001). Not used directly if
+filtered_counts are raw counts, but kept for compatibility.}
 
 \item{top_n}{Integer. Number of top features to show (default 20).}
 
@@ -31,4 +42,6 @@ A \code{ggplot} object.
 }
 \description{
 Displays the prevalence of top SHAP features in the dataset.
+This function uses raw/relative abundance data (filtered_counts) to calculate
+true prevalence, avoiding artifacts from CLR transformation.
 }

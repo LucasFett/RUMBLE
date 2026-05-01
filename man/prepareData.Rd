@@ -42,19 +42,19 @@ names contain patterns such as \code{"uncultured"}, \code{"unknown"},
 \code{"unclassified"}, or \code{"_"}. Default is \code{FALSE}.}
 
 \item{normalization_method}{Character. Method for compositional normalization.
-Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
-(Robust CLR). The rCLR method preserves the zero structure of the data
-and is more robust to pseudocount artifacts, making it suitable for
-tree-based algorithms that may overfit on pseudocount noise. Default is
-\code{"clr"} to maintain compatibility with classical microbiome literature.}
+Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
+The CLR transformation is recommended for all tree-based machine learning
+algorithms (Random Forest, XGBoost) as it preserves mathematical monotonicity
+and ensures proper feature importance calculations via SHAP values.}
 
 \item{verbose}{Logical. If \code{TRUE} (default), prints progress messages.}
 }
 \value{
-A named list with four elements:
+A named list with five elements:
 \itemize{
 \item \code{features}: A data.frame of normalized abundances (samples x taxa).
 \item \code{metadata}: A data.frame of sample metadata aligned with features.
+\item \code{filtered_counts}: A data.frame of raw/relative abundances (before CLR transformation) after prevalence filtering.
 \item \code{n_taxa_removed}: Integer. Total number of taxa removed.
 \item \code{n_samples}: Integer. Number of samples in the final dataset.
 }
@@ -62,7 +62,7 @@ A named list with four elements:
 \description{
 Performs standard preprocessing for biomarker analysis: optional taxonomic
 aggregation, optional removal of unclassified taxa, prevalence filtering,
-NA imputation, and centered log-ratio (CLR) or robust CLR (rCLR) transformation.
+NA imputation, and centered log-ratio (CLR) transformation.
 }
 \details{
 The preprocessing pipeline follows these steps:
@@ -73,7 +73,7 @@ The preprocessing pipeline follows these steps:
 \item Sanitise taxa names with \code{make.names()} for ML compatibility.
 \item Impute \code{NA} values with zero.
 \item Convert to relative abundance and filter by prevalence.
-\item Apply CLR or rCLR transformation.
+\item Apply CLR transformation.
 }
 }
 \examples{
@@ -88,9 +88,7 @@ The preprocessing pipeline follows these steps:
     # Run preprocessing with default CLR
     prep <- prepareData(ps, tax_level = "Genus", min_prevalence = 0.1)
 
-    # Or use robust CLR for tree-based models
-    prep_rclr <- prepareData(ps, tax_level = "Genus",
-                             normalization_method = "rclr")
+
 
     # Check results
     head(prep$features[, 1:5])

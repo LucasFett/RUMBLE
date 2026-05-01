@@ -2,7 +2,7 @@
 #'
 #' These functions handle data splitting, recipe building, workflow
 #' construction, hyperparameter tuning, and model evaluation. They are
-#' called internally by \code{\link{runPipeline}} and are not exported.
+#' called internally by \code{\link{RUMBLE}} and are not exported.
 #'
 #' @name ml-internal
 #' @keywords internal

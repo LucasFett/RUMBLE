@@ -17,7 +17,7 @@ RUMBLE(
   cv_folds = 5L,
   grid_size = 30L,
   top_n = 20L,
-  shap_reps = 100L,
+  shap_reps = 25L,
   xgb_trees = 1000L,
   rf_trees = 500L,
   min_prevalence = 0.05,
@@ -26,10 +26,12 @@ RUMBLE(
   normalization_method = "clr",
   seed = 42L,
   verbose = TRUE,
-  shap_data = "test",
+  shap_data,
   shap_method = "exact",
   shap_model = "all",
-  metric_cutoffs = NULL
+  metric_cutoffs = NULL,
+  run_da = TRUE,
+  da_method = c("wilcoxon", "ancombc", "aldex2")
 )
 }
 \arguments{
@@ -83,13 +85,11 @@ reduce this to 10. For Meta-Analysis or Critical Study, consider 50 or higher.}
 interpretability plots (default 20).}
 
 \item{shap_reps}{Integer. Number of repetitions for SHAP and
-permutation importance calculations (default 100).
+permutation importance calculations (default 25).
 Higher values provide more stable feature importance rankings.
-The default value (100) is recommended for publication-quality results.
-Feature rankings may vary by ±5\% between runs at this level.
-For quick exploratory analysis, you may reduce this to 10 (feature rankings
-may vary by ±20\%). For critical studies or meta-analyses, consider 1000
-repetitions (feature rankings stable to ±1\%).
+The default value (25) offers an excellent balance between robustness
+and computation time. For critical studies or meta-analyses, consider 100
+or more repetitions.
 \strong{Note:} This parameter significantly affects computation time.}
 
 \item{xgb_trees}{Integer. Number of trees for the XGBoost model
@@ -119,15 +119,22 @@ names matching common unclassified patterns (default
 \code{FALSE}).}
 
 \item{normalization_method}{Character. Method for compositional normalization.
-Options are \code{"clr"} (Centered Log-Ratio, default) or \code{"rclr"}
-(Robust CLR). The rCLR method preserves the zero structure of the data
-and is more robust to pseudocount artifacts, making it suitable for
-tree-based algorithms. Default is \code{"clr"} to maintain compatibility
-with classical microbiome literature.}
+Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
+The CLR transformation is recommended for all machine learning
+algorithms (Random Forest, XGBoost, KNN, ENET) as it preserves mathematical monotonicity
+and ensures proper feature importance calculations via SHAP values.}
 
 \item{seed}{Integer. Random seed for reproducibility (default 42).}
 
 \item{verbose}{Logical. Whether to print progress messages (default TRUE).}
+
+\item{shap_data}{Character. Which data to use for SHAP calculation and prevalence plotting.
+This parameter is mandatory and must be explicitly specified by the user.
+Options are \code{"train"} (recommended for biomarker discovery, uses training data),
+\code{"test"} (for prediction-focused analysis), or \code{"all"} (uses entire dataset).
+The choice reflects the analytical objective: use \code{"train"} to map what the model
+learned during training, \code{"test"} for held-out performance evaluation, or
+\code{"all"} for maximum statistical power in exploratory analysis.}
 
 \item{shap_method}{Character. Method for SHAP calculation. Options are
 \code{"exact"} (default, uses DALEX for rigorous SHAP values) or
@@ -149,9 +156,17 @@ are excluded from the SHAP analysis. Example:
 \code{metric_cutoffs = c("roc_auc" = 0.75, "f_meas" = 0.60)}.
 Default is \code{NULL} (no filtering). This parameter ensures that only
 high-quality models contribute to the consensus biomarker ranking.}
+
+\item{run_da}{Logical. Whether to run differential abundance analysis
+(default \code{TRUE}). When \code{TRUE}, the integrated biomarker plots
+will include a third panel with differential abundance metrics (Log2FC).}
+
+\item{da_method}{Character. Differential abundance method to use.
+Options are \code{"wilcoxon"} (default fallback requiring no Bioconductor dependencies),
+\code{"ancombc"}, or \code{"aldex2"}. Only used if \code{run_da = TRUE}.}
 }
 \value{
-A named list with six elements:
+A named list with seven elements:
 \itemize{
 \item \code{models}: Named list of fitted model objects and predictions.
 \item \code{metrics}: Data.frame summarising performance metrics.
@@ -161,6 +176,8 @@ optional model-specific SHAP plots.
 \item \code{data}: List with train and test data.frames.
 \item \code{selected_models}: Character vector of models used for
 interpretability after applying \code{metric_cutoffs}.
+\item \code{da_results}: Data.frame with differential abundance results
+(if \code{run_da = TRUE}), or \code{NULL} otherwise.
 }
 }
 \description{
@@ -186,7 +203,7 @@ and optionally saved to disk.
   if (file.exists(ps_path)) {
     ps <- readRDS(ps_path)
 
-    # EXAMPLE 1: Quick exploratory analysis Run pipeline with minimal parameters for demonstration speed
+    # EXAMPLE 1: Run pipeline with minimal parameters for demonstration speed
     # In real analysis, use defaults
     results <- RUMBLE(
       input = ps,
@@ -199,7 +216,10 @@ and optionally saved to disk.
       grid_size = 2,   # Reduced for example speed
       shap_reps = 1,   # Reduced for example speed
       n_cores = 1,
-      verbose = FALSE
+      verbose = FALSE,
+      shap_data = "train",
+      xgb_trees = 5,
+      rf_trees = 5
     )
 
     # Inspect results
@@ -220,6 +240,7 @@ and optionally saved to disk.
       # shap_reps = 100 (stable feature importance)
       # xgb_trees = 1000 (optimal XGBoost performance)
       n_cores = 1,
+      shap_data = "train",
       verbose = TRUE
     )
 

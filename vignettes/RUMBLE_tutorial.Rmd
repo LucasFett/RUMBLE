@@ -14,221 +14,193 @@ vignette: >
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
-    collapse = TRUE,
-    comment = "#>",
-    fig.width = 9,
-    fig.height = 7,
-    fig.align = "center",
-    out.width = "100%",
-    dpi = 72,
-    warning = FALSE,
-    message = FALSE,
-    crop = NULL
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 9,
+  fig.height = 7,
+  fig.align = "center",
+  out.width = "100%",
+  dpi = 72,
+  warning = FALSE,
+  message = FALSE,
+  crop = NULL
 )
 ```
 
 # Introduction
 
-The **RUMBLE** (Robust Unified Microbiome Biomarker Learning Engine)
-package provides a streamlined workflow for identifying robust microbial
-biomarkers from high-throughput sequencing data using a consensus machine
-learning strategy.
+The **RUMBLE** (Robust Unified Microbiome Biomarker Learning Engine) package provides a streamlined workflow for identifying robust microbial biomarkers from high-throughput sequencing data using a consensus machine learning strategy.
 
-This simplified vignette focuses on a single exploratory workflow using the
-example `phyloseq` object distributed with the package. The goal is to show a
-fast run of the full pipeline and then inspect the main outputs returned by
-`RUMBLE()`, including both consensus-level and model-specific interpretability
-plots.
+Version 1.1.0 integrates classical Differential Abundance (DA) analysis alongside model-agnostic interpretability (SHAP). This allows researchers to validate complex predictive patterns with rigorous False Discovery Rate (FDR) control using methods such as ALDEx2, ANCOM-BC, or Wilcoxon.
 
-# Load example data
+This vignette demonstrates a simplified exploratory workflow using the example phyloseq object distributed with the package.
 
-We begin by loading the package and the example dataset.
+# Load Example Data
 
-```{r load_phyloseq}
+```{r load_data}
 library(RUMBLE)
 library(phyloseq)
 library(knitr)
 
 ps_path <- system.file(
-    "extdata",
-    "PRJEB38465_phyloseq_com_metadados_completos.rds",
-    package = "RUMBLE"
+  "extdata",
+  "PRJEB38465_phyloseq_com_metadados_completos.rds",
+  package = "RUMBLE"
 )
 
 if (ps_path == "") {
-    stop("Example data not found. Check package installation.")
+  stop("Example data not found. Check package installation.")
 }
 
 ps <- readRDS(ps_path)
 print(ps)
 ```
 
-# Run a fast exploratory analysis
+# Run a Fast Exploratory Analysis
 
-The following chunk runs the exploratory workflow with reduced computational
-settings so that the vignette remains lightweight while still demonstrating the
-complete analysis pipeline.
+To keep the vignette lightweight, we reduce `grid_size` and `shap_reps`. In real analyses, prefer default values (`grid_size = 30`, `shap_reps = 25`).
 
-```{r run_exploratory, results='hide'}
+```{r run_pipeline}
 set.seed(42)
 
-# Run pipeline with reduced parameters for speed
 results_fast <- RUMBLE(
-    input             = ps,
-    outcome_var       = "ses",
-    class_of_interest = "Low",        
-    tax_level         = "Genus",
-    project_name      = "Fast_Exploration",
-    output_dir        = tempdir(),
-    grid_size         = 10,
-    shap_reps         = 2,
-    xgb_trees         = 100,
-    rf_trees          = 100,
-    n_cores           = 4,
-    shap_data         = "test" # Using test set for SHAP
+  input             = ps,
+  outcome_var       = "ses",
+  class_of_interest = "Low",
+  tax_level         = "Genus",
+  project_name      = "Fast_Exploration",
+  output_dir        = tempdir(),
+  grid_size         = 10,
+  shap_reps         = 2,
+  xgb_trees         = 100,
+  rf_trees          = 100,
+  n_cores           = 1,
+  shap_data         = "test",
+  run_da            = TRUE,
+  da_method         = "wilcoxon"
 )
 ```
 
-# Performance summary
+# Performance Summary
 
-The metrics table provides a compact overview of predictive performance for all
-trained models.
-
-```{r metrics_table_ps}
+```{r metrics_table}
 knitr::kable(
-    results_fast$metrics,
-    digits = 3,
-    caption = "Model performance metrics for the exploratory analysis."
+  results_fast$metrics,
+  digits = 3,
+  caption = "Model performance metrics for the exploratory analysis."
 )
 ```
 
-# Global results
+# Global Results
 
-The sections below display the main global outputs produced by the pipeline.
+## Metrics Comparison
 
-## Metrics comparison
-
-```{r plot_ps_metrics, fig.height=5, fig.cap="Performance comparison across fitted models."}
+```{r metrics_plot}
 print(results_fast$plots$metrics)
 ```
 
-## ROC curves
+## ROC Curves
 
-```{r plot_ps_roc, fig.height=5, fig.cap="ROC curves for all fitted models."}
+```{r roc_plot}
 print(results_fast$plots$roc)
 ```
 
-## Confusion matrices
+## Confusion Matrices
 
-```{r plot_ps_cm, fig.height=8, fig.cap="Confusion matrices for all fitted models on the test set."}
+```{r cm_plot}
 print(results_fast$plots$cm)
 ```
 
-## SHAP consensus using Spearman direction
+## SHAP Consensus (Spearman)
 
-```{r plot_ps_shap_spearman, fig.height=8, fig.cap="Top biomarkers ranked by global SHAP consensus using Spearman direction."}
+```{r shap_spearman}
 print(results_fast$plots$shap_spearman)
 ```
 
-## SHAP consensus using mean SHAP direction
+## Global SHAP Beeswarm
 
-```{r plot_ps_shap_mean, fig.height=8, fig.cap="Top biomarkers ranked by global SHAP consensus using mean SHAP direction."}
-print(results_fast$plots$shap_mean)
-```
-
-## Global SHAP beeswarm
-
-```{r plot_ps_shap_beeswarm, fig.height=8, fig.cap="Global SHAP beeswarm plot across the selected models."}
+```{r shap_beeswarm}
 print(results_fast$plots$shap_beeswarm)
 ```
 
-## Taxa prevalence
+## Taxa Prevalence
 
-```{r plot_ps_prevalence, fig.height=7, fig.cap="Prevalence of top SHAP features across outcome groups."}
+```{r shap_prevalence}
 print(results_fast$plots$shap_prevalence)
 ```
 
-## Integrated biomarker interpretation using Spearman direction
+## Integrated Biomarker Interpretation (Spearman)
 
-```{r plot_ps_integrated_spearman, fig.height=9, fig.width=12, fig.cap="Integrated biomarker interpretation using SHAP Spearman direction and prevalence."}
+```{r biomarker_integrated, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
 print(results_fast$plots$biomarker_integrated_spearman)
 ```
 
-## Integrated biomarker interpretation using mean SHAP direction
+# Exporting Data for Custom Analysis
 
-```{r plot_ps_integrated_mean_shap, fig.height=9, fig.width=12, fig.cap="Integrated biomarker interpretation using mean SHAP direction and prevalence."}
-print(results_fast$plots$biomarker_integrated_mean)
+The RUMBLE pipeline automatically generates an integrated data frame that mirrors the biomarker dashboard.
+
+```{r integrated_table}
+integrated_df <- results_fast$integrated_table
+head(integrated_df)
 ```
 
-## Permutation importance heatmap
+The table includes:
 
-```{r plot_ps_perm_heat, fig.height=8, fig.cap="Permutation importance heatmap across models."}
+- **Taxon**: Feature name  
+- **SHAP_Score**: Mean absolute SHAP value  
+- **Direction_Class**: Associated class  
+- **Prevalence_***: Presence across groups  
+- **logFC, p_val, adj_p_val**: Differential abundance statistics  
+
+Additionally, two `.tsv` files are generated in `output_dir`:
+
+- `[project]_integrated_biomarkers.tsv`  
+- `[project]_top_differential_abundance.tsv`  
+
+# Permutation Importance
+
+```{r perm_heat}
 print(results_fast$plots$perm_heat)
 ```
 
-# Global importance tables
+# Global Importance Tables
 
-RUMBLE returns two global SHAP summaries. The Spearman-based direction is the
-recommended option for biological interpretation because it relates feature
-abundance to SHAP contribution. The mean SHAP direction instead reflects the
-average direction in which the model pushed predictions when that feature was
-used and should therefore be interpreted as an algorithmic tendency rather than
-as a direct biological effect.
-
-```{r importance_table_ps_spearman}
+```{r importance_table}
 knitr::kable(
-    head(results_fast$importance$global_importance$spearman, 10),
-    digits = 4,
-    caption = "Top 10 biomarkers by global SHAP consensus using Spearman direction."
+  head(results_fast$importance$global_importance$spearman, 10),
+  digits = 4,
+  caption = "Top 10 biomarkers by SHAP consensus (Spearman direction)."
 )
 ```
 
-```{r importance_table_ps_mean}
-knitr::kable(
-    head(results_fast$importance$global_importance$mean_shap, 10),
-    digits = 4,
-    caption = "Top 10 biomarkers by global SHAP consensus using mean SHAP direction."
-)
-```
+# Model-Specific Outputs
 
-# Model-specific beeswarm plots
+## SHAP Beeswarm per Model
 
-By default, the exploratory run keeps `shap_model = "all"`, which means that
-RUMBLE also stores isolated SHAP outputs for each model. The following chunk
-iterates through all available model-specific beeswarm plots.
-
-```{r model_specific_beeswarms, results='asis', fig.height=8}
+```{r model_beeswarm}
 model_names <- names(results_fast$plots$model_specific$shap_beeswarm)
 
 for (model_name in model_names) {
-    cat("### ", model_name, " beeswarm\n\n", sep = "")
-    print(results_fast$plots$model_specific$shap_beeswarm[[model_name]])
-    cat("\n")
+  cat("### ", model_name, " beeswarm\n\n", sep = "")
+  print(results_fast$plots$model_specific$shap_beeswarm[[model_name]])
+  cat("\n")
 }
 ```
 
-# Model-specific integrated biomarker interpretation using Spearman
+## Integrated Biomarker Interpretation per Model
 
-The next section displays the integrated Spearman-based biomarker interpretation
-for each individual model, again without applying any metric cut-offs.
-
-```{r model_specific_integrated_spearman, results='asis', fig.height=9, fig.width=12}
+```{r model_integrated, fig.height=9, fig.width=12}
 model_names <- names(results_fast$plots$model_specific$biomarker_integrated_spearman)
 
 for (model_name in model_names) {
-    cat("### ", model_name, " integrated biomarker interpretation (Spearman)\n\n", sep = "")
-    print(results_fast$plots$model_specific$biomarker_integrated_spearman[[model_name]])
-    cat("\n")
+  cat("### ", model_name, " integrated biomarker interpretation (Spearman)\n\n", sep = "")
+  print(results_fast$plots$model_specific$biomarker_integrated_spearman[[model_name]])
+  cat("\n")
 }
 ```
 
-# Final remarks
+# Session Information
 
-This vignette intentionally keeps the workflow minimal. It shows a single fast
-exploratory execution of `RUMBLE()` and then inspects the full set of core
-outputs, including performance summaries, global SHAP consensus, global
-integrated plots, and the model-specific beeswarm and Spearman-based integrated
-biomarker views.
-
-Because no `metric_cutoffs` are supplied, every trained model that reaches the
-interpretability stage is displayed in the model-specific sections above.
+```{r session_info}
+sessionInfo()
+```
