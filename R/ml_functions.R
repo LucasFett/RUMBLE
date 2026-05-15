@@ -59,7 +59,7 @@ NULL
 ## ------------------------------------------------------------------
 #' @noRd
 .buildRecipe <- function(train_data, target_var,
-                         balance_classes = FALSE) {
+                         balance_classes = FALSE, seed = 42L) {
   rec <- recipes::recipe(
     stats::as.formula(paste(target_var, "~ .")),
     data = train_data
@@ -70,7 +70,7 @@ NULL
 
   if (balance_classes) {
     rec <- rec %>%
-      themis::step_downsample(!!rlang::sym(target_var))
+      themis::step_downsample(!!rlang::sym(target_var), seed = seed)
   }
   rec
 }
@@ -80,14 +80,14 @@ NULL
 ## Define model workflows
 ## ------------------------------------------------------------------
 #' @noRd
-.buildWorkflows <- function(recipe, xgb_trees = 1000L, rf_trees = 500L) {
+.buildWorkflows <- function(recipe, xgb_trees = 1000L, rf_trees = 500L, seed = 42L) {
   models <- list(
     RF = parsnip::rand_forest(
       mtry = tune::tune(),
       trees = rf_trees,
       min_n = tune::tune()
     ) %>%
-      parsnip::set_engine("ranger") %>%
+      parsnip::set_engine("ranger", num.threads = 1, seed = seed) %>%
       parsnip::set_mode("classification"),
 
     XGB = parsnip::boost_tree(
@@ -97,7 +97,7 @@ NULL
       loss_reduction = tune::tune(),
       min_n = tune::tune()
     ) %>%
-      parsnip::set_engine("xgboost") %>%
+      parsnip::set_engine("xgboost", nthread = 1) %>%
       parsnip::set_mode("classification"),
 
     ENET = parsnip::logistic_reg(
@@ -121,7 +121,6 @@ NULL
       workflows::add_recipe(recipe)
   })
 }
-
 
 ## ------------------------------------------------------------------
 ## Tune hyperparameters

@@ -172,11 +172,19 @@ plotShapGlobal <- function(global_importance, target_var,
     dplyr::arrange(dplyr::desc(importance_value)) %>%
     dplyr::slice_head(n = top_n)
 
+  # Garante que a coluna de significância exista, caso seja chamada com dados antigos
+  if (!"significance" %in% colnames(df_plot)) {
+    df_plot$significance <- ""
+  }
+
   df_plot$directional_value <- ifelse(
     df_plot$direction < 0,
     df_plot$importance_value * -1,
     df_plot$importance_value
   )
+
+  # Adiciona o asterisco ao nome da variável
+  df_plot$label_with_sig <- paste0(df_plot$variable, df_plot$significance)
 
   plot_title <- if (is.null(model)) {
     paste0("Biomarker Consensus (", metric_name, ")")
@@ -187,29 +195,30 @@ plotShapGlobal <- function(global_importance, target_var,
   ggplot2::ggplot(
     df_plot,
     ggplot2::aes(
-      x = reorder(variable, importance_value),
+      x = reorder(label_with_sig, importance_value),
       y = directional_value, fill = direction
     )
   ) +
     ggplot2::geom_col(width = 0.8) +
     ggplot2::coord_flip() +
+    # O gradiente agora recebe o Rho contínuo. Valores próximos a 0 ficarão cinzas.
     ggplot2::scale_fill_gradient2(
-      low = "#1f77b4", mid = "gray", high = "#d62728",
+      low = "#1f77b4", mid = "gray85", high = "#d62728",
       midpoint = 0, limits = c(-1, 1),
-      name = "Effect direction"
+      name = "Correlation (\u03c1)"
     ) +
     ggplot2::labs(
       x = NULL,
-      y = paste0("SHAP contribution (", metric_name, ")"),
+      # Rótulo dinâmico dependendo se é consenso ou modelo isolado
+      y = if (is.null(model)) paste0("Normalized SHAP Score (", metric_name, ")") else paste0("Raw SHAP Score (", metric_name, ")"),
       title = plot_title,
       subtitle = paste0(
         target_var, ": <- ", negative_class,
-        " | ", class_of_interest, " ->"
+        " | ", class_of_interest, " ->\n(* FDR < 0.05)"
       )
     ) +
     ggplot2::theme_minimal(base_size = 12)
 }
-
 
 #' Plot Confusion Matrices
 #'
@@ -323,9 +332,11 @@ plotMetricsComparison <- function(final_models) {
 #' Plot SHAP Beeswarm Plot
 #'
 #' Displays a beeswarm plot showing the distribution of SHAP values
-#' for the top features, broken down by model type.
+#' for the top features using ggbeeswarm.
 #'
 #' @param shap_raw A data.frame of raw SHAP values.
+#' @param prediction_data Data.frame used for predictions, containing the target variable. Optional.
+#' @param target_var Character. Name of the target variable. Optional.
 #' @param top_n Integer. Number of top features to show (default 20).
 #' @param model Character or \code{NULL}. Optional model name to isolate a
 #'   specific model in the beeswarm plot.
@@ -333,7 +344,7 @@ plotMetricsComparison <- function(final_models) {
 #' @return A \code{ggplot} object.
 #'
 #' @export
-plotShapBeeswarm <- function(shap_raw, top_n = 20L, model = NULL) {
+plotShapBeeswarm <- function(shap_raw, prediction_data = NULL, target_var = NULL, top_n = 20L, model = NULL) {
 
   if (!is.null(model)) {
     available_models <- unique(shap_raw$model)
@@ -346,17 +357,37 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L, model = NULL) {
     shap_raw <- shap_raw[shap_raw$model %in% model, , drop = FALSE]
   }
 
+  # Obter as top features ranqueadas pela média absoluta do SHAP
   top_features <- shap_raw %>%
     dplyr::group_by(variable) %>%
-    dplyr::summarize(mean_abs = mean(abs(contribution)), .groups = "drop") %>%
+    dplyr::summarize(mean_abs = mean(abs(contribution), na.rm = TRUE), .groups = "drop") %>%
     dplyr::arrange(dplyr::desc(mean_abs)) %>%
     dplyr::slice_head(n = top_n) %>%
     dplyr::pull(variable)
 
-  shap_filtered <- shap_raw[shap_raw$variable %in% top_features, ]
+  shap_filtered <- shap_raw %>%
+    dplyr::filter(variable %in% top_features) %>%
+    # Remover contribuições zeradas para despoluir a visualização central
+    dplyr::filter(contribution != 0)
 
-  # Define the exact direction (-1 for negative, 1 for positive) for the color gradient.
-  shap_filtered$Direction <- sign(shap_filtered$contribution)
+  # Normalizar feature values (Min-Max scaling por taxon)
+  shap_filtered <- shap_filtered %>%
+    dplyr::group_by(variable) %>%
+    dplyr::mutate(
+      feature_val_scaled = (feature_value - min(feature_value, na.rm = TRUE)) /
+        (max(feature_value, na.rm = TRUE) - min(feature_value, na.rm = TRUE) + 1e-6)
+    ) %>%
+    dplyr::ungroup()
+
+  # Fazer o join com as classes reais
+  has_classes <- !is.null(prediction_data) && !is.null(target_var)
+  if (has_classes) {
+    class_df <- data.frame(
+      observation_id = seq_len(nrow(prediction_data)),
+      True_Class = prediction_data[[target_var]]
+    )
+    shap_filtered <- dplyr::left_join(shap_filtered, class_df, by = "observation_id")
+  }
 
   plot_title <- if (is.null(model)) {
     "SHAP Distribution by Model"
@@ -364,44 +395,65 @@ plotShapBeeswarm <- function(shap_raw, top_n = 20L, model = NULL) {
     paste0("SHAP Distribution: ", model)
   }
 
-  ggplot2::ggplot(
+  # Plot base
+  p <- ggplot2::ggplot(
     shap_filtered,
     ggplot2::aes(
-      y = reorder(variable, abs(contribution)),
-      x = contribution
+      x = contribution,
+      y = reorder(variable, abs(contribution), FUN = mean)
     )
   ) +
-    # Zero line
-    ggplot2::geom_vline(
-      xintercept = 0, linetype = "dashed",
-      color = "gray50", linewidth = 0.5
+    # Linha zero central
+    ggplot2::geom_vline(xintercept = 0, color = "black")
+
+  # Adicionar os pontos com algoritmo swarm e corral gutter
+  if (has_classes) {
+    p <- p + ggbeeswarm::geom_beeswarm(
+      ggplot2::aes(color = feature_val_scaled, shape = True_Class),
+      size = 1.5,
+      method = "swarm",
+      corral = "gutter",
+      corral.width = 0.7,
+      priority = "density",
+      cex = 0.5
     ) +
-    ggbeeswarm::geom_quasirandom(
-      ggplot2::aes(shape = model, color = Direction),
-      groupOnX = FALSE,
-      size = 1.0,
-      alpha = 0.7,
-      width = 0.35,
-      stroke = 0.2
-    ) +
-    ggplot2::scale_color_gradient2(
-      low = "#1f77b4", mid = "gray", high = "#d62728",
-      midpoint = 0,
-      limits = c(-1, 1),
-      name = "Direction"
-    ) +
-    ggplot2::labs(
-      y = NULL,
-      x = "SHAP Contribution",
-      title = plot_title,
-      shape = "Model"
-    ) +
-    ggplot2::theme_minimal(base_size = 12) +
-    ggplot2::theme(
-      panel.grid.major.y = ggplot2::element_line(color = "gray90", linetype = "dotted"),
-      panel.grid.minor = ggplot2::element_blank(),
-      legend.position = "right"
+      ggplot2::labs(shape = "Class")
+  } else {
+    p <- p + ggbeeswarm::geom_beeswarm(
+      ggplot2::aes(color = feature_val_scaled),
+      size = 1.5,
+      method = "swarm",
+      corral = "gutter",
+      corral.width = 0.7,
+      priority = "density",
+      cex = 0.5
     )
+  }
+
+  # Aplicar o gradiente Viridis e o tema clássico
+  p <- p + viridis::scale_color_viridis(
+    option = "H",
+    alpha = 0.7,
+    breaks = c(0, 1),
+    labels = c("Low", "High"),
+    name = "Feature Value"
+  ) +
+    ggplot2::labs(
+      x = "SHAP Value (Impact on Model Output)",
+      y = "Feature",
+      title = plot_title
+    ) +
+    ggplot2::theme_classic(base_size = 12) +
+    ggplot2::theme(
+      axis.text.y = ggplot2::element_text(face = "italic")
+    )
+
+  # Se for o plot de consenso, separar em painéis
+  if (is.null(model) && length(unique(shap_filtered$model)) > 1) {
+    p <- p + ggplot2::facet_wrap(~ model, scales = "free_x")
+  }
+
+  return(p)
 }
 
 #' Plot Taxa Prevalence for Top SHAP Features
@@ -545,143 +597,141 @@ plotBiomarkerIntegrated <- function(filtered_counts,
   method_full <- ifelse(is.null(da_results$Method[1]), "DA", da_results$Method[1])
 
   # ==================================================================
-  # 1. Prepare shared taxonomic order and STRICT shared levels
+  # 1. Preparar dados com Significância e Rótulos Refinados
   # ==================================================================
   importance_full <- .selectImportanceTable(global_importance, model = model)
 
-  taxa_order <- importance_full %>%
+  # Garantir que temos as colunas de significância (caso venha de um objeto antigo)
+  if (!"significance" %in% colnames(importance_full)) importance_full$significance <- ""
+  if (!"direction" %in% colnames(importance_full)) importance_full$direction <- 0
+
+  # Criar o rótulo com asterisco para o eixo Y
+  importance_full <- importance_full %>%
+    dplyr::mutate(label_with_sig = paste0(variable, significance))
+
+  # Definir a ordem baseada na importância (SHAP Score)
+  # Usamos ordem ascendente aqui pois o ggplot empilha fatores de baixo para cima
+  taxa_data_top <- importance_full %>%
     dplyr::filter(variable != "TOTAL_SHAP") %>%
     dplyr::slice_max(order_by = importance_value, n = top_n, with_ties = FALSE) %>%
-    dplyr::arrange(importance_value) %>%
-    dplyr::pull(variable)
+    dplyr::arrange(importance_value)
 
-  # Força a mesma ordem de níveis para todos os painéis (Garante 1 única legenda)
-  shared_levels <- c(class_of_interest, negative_class)
-  class_colors_discrete <- stats::setNames(c("#d62728", "#1f77b4"), shared_levels)
+  # A CORREÇÃO CRÍTICA AQUI: Travar a coluna como Fator na ordem exata da importância
+  taxa_data_top$label_with_sig <- factor(taxa_data_top$label_with_sig, levels = taxa_data_top$label_with_sig)
 
-  importance_plot_data <- importance_full %>%
-    dplyr::filter(variable %in% taxa_order) %>%
+  taxa_order_labels <- levels(taxa_data_top$label_with_sig)
+  taxa_order_original <- taxa_data_top$variable
+
+  # Criar mapeamento para sincronizar os outros painéis (B, C e D)
+  sig_map <- stats::setNames(taxa_data_top$label_with_sig, taxa_data_top$variable)
+
+  ## ==================================================================
+  ## Painel A: ML Importance (SHAP + Rho Contínuo + Direção)
+  ## ==================================================================
+  msg("  - Generating Panel A (ML Importance with directional bars)...")
+
+  # Criar o valor direcional: inverte o SHAP Score se o Rho for negativo
+  taxa_data_top <- taxa_data_top %>%
     dplyr::mutate(
-      variable = factor(variable, levels = taxa_order),
-      direction_class = ifelse(direction > 0, class_of_interest, negative_class),
-      direction_class = factor(direction_class, levels = shared_levels),
-      plot_shap_value = ifelse(direction < 0, importance_value * -1, importance_value)
+      directional_value = ifelse(direction < 0, importance_value * -1, importance_value)
     )
 
-  ## ==================================================================
-  ## Panel A: ML Importance (SHAP) - Solid Bars
-  ## ==================================================================
-  msg("  - Generating Panel A (ML Importance)...")
+  # Calcular o limite máximo para deixar o eixo X simétrico (zero no centro)
+  max_imp <- max(abs(taxa_data_top$directional_value), na.rm = TRUE)
 
-  p_imp <- ggplot2::ggplot(importance_plot_data, ggplot2::aes(x = plot_shap_value, y = variable, fill = direction_class)) +
+  # Como label_with_sig agora é um fator, o ggplot respeitará a ordem (Maior no topo)
+  p_imp <- ggplot2::ggplot(taxa_data_top, ggplot2::aes(x = directional_value, y = label_with_sig, fill = direction)) +
     ggplot2::geom_col(color = "black", linewidth = 0.3, width = 0.7) +
-    ggplot2::labs(title = "A. ML Importance", subtitle = paste0("Abs SHAP (", metric_name, ")"), x = "SHAP Score", y = NULL) +
-    ggplot2::scale_fill_manual(values = class_colors_discrete, name = target_var, na.translate = FALSE) +
-    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.1))) +
+    ggplot2::scale_fill_gradient2(
+      low = "#1f77b4", mid = "gray85", high = "#d62728",
+      midpoint = 0, limits = c(-1, 1),
+      name = paste0(metric_name, " (\u03c1)")
+    ) +
+    # Adicionar linha tracejada no zero
+    ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.5) +
+    ggplot2::labs(
+      title = "A. ML Importance",
+      # Subtítulo dinâmico
+      subtitle = if (is.null(model)) "Normalized Directional SHAP" else "Raw Directional SHAP",
+      x = "Importance",
+      y = NULL
+    ) +
+    # Eixo X simétrico com uma margem de 5%
+    ggplot2::scale_x_continuous(limits = c(-max_imp * 1.05, max_imp * 1.05)) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.y = ggplot2::element_text(size = 9, face = "italic"),
                    panel.grid.major.y = ggplot2::element_blank(),
                    plot.title = ggplot2::element_text(size = 11, face = "bold"),
-                   plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
-                   plot.margin = ggplot2::margin(r = 5))
+                   plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"))
 
   ## ==================================================================
-  ## Panel B: Taxa Prevalence
+  ## Painel B: Taxa Prevalence (Sincronizado)
   ## ==================================================================
   msg("  - Generating Panel B (Taxa Prevalence)...")
 
   groups <- metadata[[target_var]]
+  rel_abund <- sweep(filtered_counts, 1, rowSums(filtered_counts) + 1e-9, "/")
 
-  depths <- rowSums(filtered_counts)
-  depths[depths == 0] <- 1
-  rel_abund <- sweep(filtered_counts, 1, depths, "/")
+  avail_taxa <- intersect(taxa_order_original, colnames(rel_abund))
 
-  avail_taxa <- intersect(taxa_order, colnames(rel_abund))
-  X_data <- rel_abund[, avail_taxa, drop = FALSE]
-
-  prev_list <- lapply(levels(factor(groups)), function(lvl) {
+  df_prev <- lapply(levels(factor(groups)), function(lvl) {
     idx <- which(groups == lvl)
-    X_group <- X_data[idx, , drop = FALSE]
-    presence_matrix <- X_group > min_abundance
-    prev <- colMeans(presence_matrix)
-    data.frame(variable = names(prev),
-               prevalence = as.numeric(prev),
-               group = lvl,
-               stringsAsFactors = FALSE)
-  })
+    prev <- colMeans(rel_abund[idx, avail_taxa, drop = FALSE] > min_abundance)
+    data.frame(variable = names(prev), prevalence = as.numeric(prev), group = lvl)
+  }) %>% dplyr::bind_rows()
 
-  df_prev <- dplyr::bind_rows(prev_list)
-  df_prev$variable <- factor(df_prev$variable, levels = taxa_order)
+  # Aplicar rótulos com asteriscos e ordem
+  df_prev$label_with_sig <- sig_map[df_prev$variable]
+  df_prev$label_with_sig <- factor(df_prev$label_with_sig, levels = taxa_order_labels)
 
-  # Força os níveis do Painel B a serem idênticos aos do Painel A
-  df_prev$group <- factor(df_prev$group, levels = shared_levels)
-
-  p_prev <- ggplot2::ggplot(df_prev, ggplot2::aes(x = prevalence, y = variable, fill = group)) +
+  p_prev <- ggplot2::ggplot(df_prev, ggplot2::aes(x = prevalence, y = label_with_sig, fill = group)) +
     ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.8), width = 0.7, color = "black", linewidth = 0.3) +
-    ggplot2::scale_x_continuous(labels = scales::percent_format(), limits = c(0, 1), breaks = c(0, 0.5, 1), expand = c(0,0)) +
-    ggplot2::scale_fill_manual(values = class_colors_discrete, name = target_var, na.translate = FALSE) +
-    # Aqui alteramos a legenda para deixar explícito que é a abundância relativa
-    ggplot2::labs(title = "B. Prevalence", subtitle = paste0("Rel. Abund. > ", scales::percent(min_abundance, accuracy = 0.01)), x = "Fraction") +
+    ggplot2::scale_fill_manual(values = c("#1f77b4", "#d62728"), name = "Group") +
+    ggplot2::scale_x_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+    ggplot2::labs(title = "B. Prevalence", subtitle = paste0("Abund > ", scales::percent(min_abundance)), x = "Fraction", y = NULL) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.y = ggplot2::element_blank(),
-                   axis.ticks.y = ggplot2::element_blank(),
-                   axis.title.y = ggplot2::element_blank(),
                    panel.grid.major.y = ggplot2::element_blank(),
-                   plot.title = ggplot2::element_text(size = 11, face = "bold"),
-                   plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
-                   plot.margin = ggplot2::margin(r = 5, l = 5))
+                   plot.title = ggplot2::element_text(size = 11, face = "bold"))
 
   ## ==================================================================
-  ## Panel C & D: Differential Abundance (LogFC and Significance)
+  ## Painéis C & D: Differential Abundance
   ## ==================================================================
   if (show_da) {
-    msg("  - Generating Panels C & D (Differential Abundance)...")
-
     da_plot_data <- da_results %>%
-      dplyr::filter(Taxon %in% taxa_order) %>%
-      dplyr::mutate(Taxon = factor(Taxon, levels = taxa_order))
-
-    da_plot_data <- da_plot_data %>%
+      dplyr::filter(Taxon %in% taxa_order_original) %>%
       dplyr::mutate(
-        direction_discrete = ifelse(logFC > 0, class_of_interest, negative_class),
-        # Força os níveis do Painel C a serem idênticos aos do Painel A e B
-        direction_discrete = factor(direction_discrete, levels = shared_levels),
-        neg_log_fdr = -log10(ifelse(adj_p_val == 0, 1e-16, adj_p_val))
+        label_with_sig = factor(sig_map[Taxon], levels = taxa_order_labels),
+        neg_log_fdr = -log10(ifelse(adj_p_val == 0, 1e-16, adj_p_val)),
+        # Nova coluna para definir a direção discreta do Log2FC
+        fc_direction = ifelse(logFC > 0, "Positive", "Negative")
       )
 
-    # Panel C: Effect Size (Log2FC)
-    p_fc <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = logFC, y = Taxon, fill = direction_discrete)) +
-      ggplot2::geom_col(color = "black", orientation = "y", linewidth = 0.3, width = 0.7) +
-      ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
-      ggplot2::labs(title = "C. Effect Size", subtitle = paste0("Log2FC (", method_full, ")"), x = "Log2 Fold-Change") +
-      ggplot2::scale_fill_manual(values = class_colors_discrete, name = target_var, na.translate = FALSE) +
+    p_fc <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = logFC, y = label_with_sig, fill = fc_direction)) +
+      ggplot2::geom_col(color = "black", linewidth = 0.3, width = 0.7) +
+      # Escala manual com cores discretas e remoção da legenda
+      ggplot2::scale_fill_manual(
+        values = c("Positive" = "#d62728", "Negative" = "#1f77b4"),
+        guide = "none"
+      ) +
+      ggplot2::geom_vline(xintercept = 0, linetype = "dashed") +
+      ggplot2::labs(title = "C. Effect Size", subtitle = method_full, x = "Log2FC", y = NULL) +
       ggplot2::theme_minimal() +
       ggplot2::theme(axis.text.y = ggplot2::element_blank(),
-                     axis.ticks.y = ggplot2::element_blank(),
-                     axis.title.y = ggplot2::element_blank(),
                      panel.grid.major.y = ggplot2::element_blank(),
-                     plot.title = ggplot2::element_text(size = 11, face = "bold"),
-                     plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
-                     plot.margin = ggplot2::margin(r = 5, l = 5))
+                     plot.title = ggplot2::element_text(size = 11, face = "bold"))
 
-    # Panel D: Significance (-log10 FDR)
-    p_sig <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = neg_log_fdr, y = Taxon)) +
+    p_sig <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = neg_log_fdr, y = label_with_sig)) +
       ggplot2::geom_col(fill = "gray80", color = "black", linewidth = 0.3, width = 0.7) +
       ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "red") +
-      ggplot2::labs(title = "D. Significance", subtitle = "-log10(FDR)", x = "-log10(FDR)") +
-      ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.1))) +
+      ggplot2::labs(title = "D. Significance", subtitle = "-log10 FDR", x = "Score", y = NULL) +
       ggplot2::theme_minimal() +
       ggplot2::theme(axis.text.y = ggplot2::element_blank(),
-                     axis.ticks.y = ggplot2::element_blank(),
-                     axis.title.y = ggplot2::element_blank(),
                      panel.grid.major.y = ggplot2::element_blank(),
-                     plot.title = ggplot2::element_text(size = 11, face = "bold"),
-                     plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"),
-                     plot.margin = ggplot2::margin(l = 5))
-
+                     plot.title = ggplot2::element_text(size = 11, face = "bold"))
   } else {
-    p_fc <- ggplot2::ggplot() + ggplot2::theme_void() + ggplot2::labs(title = "C. Effect Size\n(N/A)")
-    p_sig <- ggplot2::ggplot() + ggplot2::theme_void() + ggplot2::labs(title = "D. Significance\n(N/A)")
+    p_fc <- ggplot2::ggplot() + ggplot2::theme_void()
+    p_sig <- ggplot2::ggplot() + ggplot2::theme_void()
   }
 
   ## ==================================================================
@@ -702,6 +752,7 @@ plotBiomarkerIntegrated <- function(filtered_counts,
   composite_plot <- patchwork::wrap_plots(plot_list) + plot_layout +
     patchwork::plot_annotation(
       title = annotation_title,
+      subtitle = "(* Taxa with significant Spearman correlation, FDR < 0.05)",
       theme = ggplot2::theme(plot.title = ggplot2::element_text(size = 15, face = "bold", margin = ggplot2::margin(b = 10)))
     ) &
     ggplot2::theme(legend.position = "bottom",
@@ -808,9 +859,11 @@ getIntegratedBiomarkerTable <- function(filtered_counts,
     dplyr::mutate(
       Taxon = variable,
       Direction_Class = ifelse(direction > 0, class_of_interest, negative_class),
-      SHAP_Score = importance_value
+      SHAP_Score = importance_value,
+      SHAP_Rho = direction,
+      SHAP_FDR = adj_p_val
     ) %>%
-    dplyr::select(Taxon, SHAP_Score, Direction_Class)
+    dplyr::select(Taxon, SHAP_Score, Direction_Class, SHAP_Rho, SHAP_FDR)
 
   # 2. Prevalence
   groups <- metadata[[target_var]]

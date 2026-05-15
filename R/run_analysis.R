@@ -361,8 +361,8 @@ RUMBLE <- function(input,
   msg("[3/5] Building and tuning models...")
   set.seed(seed)
   recipe <- .buildRecipe(train_data, outcome_var,
-                         balance_classes = TRUE)
-  workflows <- .buildWorkflows(recipe, xgb_trees = xgb_trees, rf_trees = rf_trees)
+                         balance_classes = TRUE, seed = seed)
+  workflows <- .buildWorkflows(recipe, xgb_trees = xgb_trees, rf_trees = rf_trees, seed = seed)
 
   tuned <- .tuneModels(
     workflows, train_data, outcome_var,
@@ -502,9 +502,8 @@ RUMBLE <- function(input,
   msg("Generating plots...")
 
   # Sincroniza as amostras dos gráficos com as amostras usadas no SHAP
-  plot_samples <- rownames(prediction_data)
-  plot_filtered_counts <- filtered_counts[plot_samples, , drop = FALSE]
-  plot_metadata <- prep$metadata[plot_samples, , drop = FALSE]
+  plot_filtered_counts <- filtered_counts
+  plot_metadata <- prep$metadata
 
   msg("Generating integrated data tables...")
   # Extração da Tabela Integrada (Consensus)
@@ -542,9 +541,12 @@ RUMBLE <- function(input,
 
       model_specific_plots$shap_beeswarm[[model_name]] <- plotShapBeeswarm(
         importance$shap_raw,
+        prediction_data = prediction_data,
+        target_var = outcome_var,
         top_n = top_n,
         model = model_name
       )
+
       model_specific_plots$shap_prevalence[[model_name]] <- plotTaxaPrevalence(
         filtered_counts = plot_filtered_counts,
         metadata = plot_metadata,
@@ -584,8 +586,12 @@ RUMBLE <- function(input,
     ),
 
     shap_beeswarm = plotShapBeeswarm(
-      importance$shap_raw, top_n = top_n
+      importance$shap_raw,
+      prediction_data = prediction_data,
+      target_var = outcome_var,
+      top_n = top_n
     ),
+
     shap_prevalence = plotTaxaPrevalence(
       filtered_counts = plot_filtered_counts,
       metadata = plot_metadata,

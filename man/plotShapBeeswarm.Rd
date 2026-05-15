@@ -4,10 +4,20 @@
 \alias{plotShapBeeswarm}
 \title{Plot SHAP Beeswarm Plot}
 \usage{
-plotShapBeeswarm(shap_raw, top_n = 20L, model = NULL)
+plotShapBeeswarm(
+  shap_raw,
+  prediction_data = NULL,
+  target_var = NULL,
+  top_n = 20L,
+  model = NULL
+)
 }
 \arguments{
 \item{shap_raw}{A data.frame of raw SHAP values.}
+
+\item{prediction_data}{Data.frame used for predictions, containing the target variable. Optional.}
+
+\item{target_var}{Character. Name of the target variable. Optional.}
 
 \item{top_n}{Integer. Number of top features to show (default 20).}
 
@@ -19,5 +29,5 @@ A \code{ggplot} object.
 }
 \description{
 Displays a beeswarm plot showing the distribution of SHAP values
-for the top features, broken down by model type.
+for the top features using ggbeeswarm.
 }

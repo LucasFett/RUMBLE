@@ -313,61 +313,85 @@ computeFeatureImportance <- function(explainers,
   }
 
   # --- 3. AGGREGATE RESULTS ---
-  msg("Aggregating results...")
+  msg("Aggregating results and applying Max-Abs SHAP normalization...")
 
   ## Top permutation
   top_perm <- perm %>%
     dplyr::group_by(model) %>%
     dplyr::mutate(
-      # Calculate full model loss for each model
-      full_model_loss = mean(
-        dropout_loss[variable == "_full_model_"],
-        na.rm = TRUE
-      )
+      full_model_loss = mean(dropout_loss[variable == "_full_model_"], na.rm = TRUE)
     ) %>%
     dplyr::ungroup() %>%
-    # Remove internal DALEX rows AFTER calculating full_model_loss
     dplyr::filter(!variable %in% c("_full_model_", "_baseline_")) %>%
-    dplyr::mutate(
-      # Calculate Delta loss (relative importance)
-      delta_loss = dropout_loss - full_model_loss
-    ) %>%
+    dplyr::mutate(delta_loss = dropout_loss - full_model_loss) %>%
     dplyr::group_by(model, variable) %>%
-    dplyr::summarize(
-      mean_delta_loss = mean(delta_loss, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
+    dplyr::summarize(mean_delta_loss = mean(delta_loss, na.rm = TRUE), .groups = "drop") %>%
     dplyr::arrange(model, dplyr::desc(mean_delta_loss)) %>%
     dplyr::group_by(model) %>%
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()
 
-  ## --- 3.1 Spearman Metric ---
-  ## Top SHAP (Spearman)
+  ## --- 3.1 SHAP Normalization ---
+  ## Scale SHAP values per model using Max-Absolute scaling [-1, 1].
+  ## This prevents models with naturally wider probability distributions (e.g., XGBoost)
+  ## from dominating the consensus over conservative models (e.g., RF).
+  shap <- shap %>%
+    dplyr::group_by(model) %>%
+    dplyr::mutate(
+      max_abs_model = max(abs(contribution), na.rm = TRUE),
+      contribution_scaled = ifelse(max_abs_model > 0, contribution / max_abs_model, 0)
+    ) %>%
+    dplyr::ungroup()
+
+  ## Função auxiliar interna para calcular Spearman de forma segura
+  safe_spearman <- function(x, y) {
+    if (length(unique(x)) < 2 || length(unique(y)) < 2) {
+      return(data.frame(rho = 0, p_val = 1.0))
+    }
+    tryCatch({
+      res <- stats::cor.test(x, y, method = "spearman", exact = FALSE)
+      data.frame(rho = res$estimate, p_val = res$p.value)
+    }, error = function(e) data.frame(rho = 0, p_val = 1.0))
+  }
+
+  ## --- 3.2 Spearman Metric ---
+  ## Top SHAP (Spearman - Por Modelo) -> USAR VALORES CRUS PARA TRANSPARÊNCIA
   top_shap_spearman <- shap %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(
+      # MUDANÇA: Aqui usamos 'contribution' crua para mostrar a escala real do modelo (XGB vs RF)
       mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
-      direction = suppressWarnings(sign(stats::cor(feature_value, contribution, method = "spearman"))),
+      spearman_stats = list(safe_spearman(feature_value, contribution)),
       .groups = "drop"
     ) %>%
-    dplyr::arrange(model, dplyr::desc(mean_abs_contribution)) %>%
+    tidyr::unnest(spearman_stats) %>%
+    dplyr::rename(direction = rho) %>%
     dplyr::group_by(model) %>%
+    dplyr::mutate(
+      adj_p_val = stats::p.adjust(p_val, method = "BH"),
+      significance = ifelse(adj_p_val < 0.05, "*", "")
+    ) %>%
+    dplyr::arrange(model, dplyr::desc(mean_abs_contribution)) %>%
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()
 
-  ## Global consensus (Spearman)
+  ## Global consensus (Spearman) -> USAR VALORES ESCALADOS PARA JUSTIÇA DEMOCRÁTICA
   global_importance_spearman <- shap %>%
     dplyr::group_by(variable) %>%
     dplyr::summarise(
-      mean_abs_contribution = mean(abs(contribution), na.rm = TRUE),
-      direction = suppressWarnings(sign(stats::cor(feature_value, contribution, method = "spearman"))),
+      # MUDANÇA: Aqui mantemos 'contribution_scaled' para impedir que o XGBoost domine o consenso
+      mean_abs_contribution = mean(abs(contribution_scaled), na.rm = TRUE),
+      spearman_stats = list(safe_spearman(feature_value, contribution)),
       n_models  = dplyr::n_distinct(model),
       .groups   = "drop"
     ) %>%
+    tidyr::unnest(spearman_stats) %>%
+    dplyr::rename(direction = rho) %>%
+    dplyr::mutate(
+      adj_p_val = stats::p.adjust(p_val, method = "BH"),
+      significance = ifelse(adj_p_val < 0.05, "*", "")
+    ) %>%
     dplyr::arrange(dplyr::desc(mean_abs_contribution))
-
-
 
   msg("Feature importance analysis complete.")
 
@@ -375,11 +399,7 @@ computeFeatureImportance <- function(explainers,
     permutation_raw = perm,
     permutation_top = top_perm,
     shap_raw = shap,
-    shap_top = list(
-      spearman = top_shap_spearman
-    ),
-    global_importance = list(
-      spearman = global_importance_spearman
-    )
+    shap_top = list(spearman = top_shap_spearman),
+    global_importance = list(spearman = global_importance_spearman)
   )
 }
