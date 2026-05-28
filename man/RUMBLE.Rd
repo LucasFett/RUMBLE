@@ -126,7 +126,13 @@ and ensures proper feature importance calculations via SHAP values.}
 
 \item{seed}{Integer. Random seed for reproducibility (default 42).}
 
-\item{verbose}{Logical. Whether to print progress messages (default TRUE).}
+\item{verbose}{Logical. Whether to print progress messages (default TRUE).
+#' @param metric_cutoffs Named numeric vector. Optional quality filter for models
+based on performance metrics. Models failing to meet the specified thresholds
+are excluded from the SHAP analysis. Example:
+\code{metric_cutoffs = c("mcc" = 0.8, "roc_auc" = 0.75)}.
+Default is \code{NULL} (no filtering). This parameter ensures that only
+high-quality models contribute to the consensus biomarker ranking.}
 
 \item{shap_data}{Character. Which data to use for SHAP calculation and prevalence plotting.
 This parameter is mandatory and must be explicitly specified by the user.
@@ -149,13 +155,6 @@ profiles are generated in addition to the consensus plots. Use
 passes \code{metric_cutoffs}, \code{"consensus"} to skip isolated model
 plots, or provide one or more model names (for example,
 \code{c("RF", "XGB")}).}
-
-\item{metric_cutoffs}{Named numeric vector. Optional quality filter for models
-based on performance metrics. Models failing to meet the specified thresholds
-are excluded from the SHAP analysis. Example:
-\code{metric_cutoffs = c("roc_auc" = 0.75, "f_meas" = 0.60)}.
-Default is \code{NULL} (no filtering). This parameter ensures that only
-high-quality models contribute to the consensus biomarker ranking.}
 
 \item{run_da}{Logical. Whether to run differential abundance analysis
 (default \code{TRUE}). When \code{TRUE}, the integrated biomarker plots

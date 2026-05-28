@@ -13,7 +13,8 @@ computeFeatureImportance(
   repetitions = 10L,
   n_cores = 1L,
   shap_method = "exact",
-  verbose = TRUE
+  verbose = TRUE,
+  model_weights = NULL
 )
 }
 \arguments{

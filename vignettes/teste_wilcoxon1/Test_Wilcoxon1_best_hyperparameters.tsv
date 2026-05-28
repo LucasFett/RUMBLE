@@ -1,0 +1,11 @@
+Model	Parameter	Value
+RF	mtry	69
+RF	min_n	2
+XGB	min_n	2
+XGB	tree_depth	15
+XGB	learn_rate	0.001
+XGB	loss_reduction	31.6227766016838
+ENET	penalty	1e-10
+ENET	mixture	1
+KNN	neighbors	15
+KNN	weight_func	rectangular

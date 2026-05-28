@@ -8,5 +8,5 @@ utils::globalVariables(c(
   "mean_delta_loss", "model", "observation_id", "prevalence",
   "sensitivity", "significance", "specificity", "text_col", "variable",
   "Direction_Class", "SHAP_Score", "Prevalence", "Group", "p_val", "adj_p_val",
-  "direction_class", "plot_shap_value", "direction_discrete", "neg_log_fdr"
+  "direction_class", "plot_shap_value", "direction_discrete", "neg_log_fdr","Parameter", "Value", "mean", "std_err", "CV_Mean", "CV_StdErr"
 ))

@@ -158,7 +158,8 @@ computeFeatureImportance <- function(explainers,
                                      repetitions = 10L,
                                      n_cores = 1L,
                                      shap_method = "exact",
-                                     verbose = TRUE) {
+                                     verbose = TRUE,
+                                     model_weights = NULL) {
 
   msg <- function(...) {
     if (verbose) message(...)
@@ -376,11 +377,21 @@ computeFeatureImportance <- function(explainers,
     dplyr::ungroup()
 
   ## Global consensus (Spearman) -> USAR VALORES ESCALADOS PARA JUSTIÇA DEMOCRÁTICA
-  global_importance_spearman <- shap %>%
+
+  # Se os pesos não foram fornecidos, criar pesos iguais (fallback)
+  if (is.null(model_weights)) {
+    model_weights <- stats::setNames(rep(1, length(explainers)), names(explainers))
+  }
+
+  # Adiciona os pesos ao dataframe do SHAP baseado na coluna 'model'
+  shap_weighted <- shap %>%
+    dplyr::mutate(weight = model_weights[model])
+
+  global_importance_spearman <- shap_weighted %>%
     dplyr::group_by(variable) %>%
     dplyr::summarise(
-      # MUDANÇA: Aqui mantemos 'contribution_scaled' para impedir que o XGBoost domine o consenso
-      mean_abs_contribution = mean(abs(contribution_scaled), na.rm = TRUE),
+      # Média Ponderada: soma(valor * peso) / soma(pesos)
+      mean_abs_contribution = sum(abs(contribution_scaled) * weight, na.rm = TRUE) / sum(weight, na.rm = TRUE),
       spearman_stats = list(safe_spearman(feature_value, contribution)),
       n_models  = dplyr::n_distinct(model),
       .groups   = "drop"

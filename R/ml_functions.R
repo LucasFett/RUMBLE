@@ -17,7 +17,7 @@
 #' @importFrom tune tune tune_grid select_best finalize_workflow
 #'      control_grid
 #' @importFrom yardstick metric_set f_meas roc_auc accuracy
-#'      bal_accuracy
+#'      bal_accuracy mcc
 #' @importFrom rsample initial_split training testing vfold_cv
 #' @importFrom parallel makeCluster stopCluster detectCores
 #' @importFrom doParallel registerDoParallel
@@ -140,7 +140,8 @@ NULL
   metrics <- yardstick::metric_set(
     yardstick::f_meas,
     yardstick::roc_auc,
-    yardstick::accuracy
+    yardstick::accuracy,
+    yardstick::mcc
   )
 
   # Setup parallel backend for tuning if requested
@@ -203,7 +204,8 @@ NULL
   metrics_fn <- yardstick::metric_set(
     yardstick::f_meas,
     yardstick::accuracy,
-    yardstick::bal_accuracy
+    yardstick::bal_accuracy,
+    yardstick::mcc
   )
 
   ## Ensure consistent factor levels

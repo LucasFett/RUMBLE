@@ -103,10 +103,10 @@
 #'   and ensures proper feature importance calculations via SHAP values.
 #' @param seed Integer. Random seed for reproducibility (default 42).
 #' @param verbose Logical. Whether to print progress messages (default TRUE).
-#' @param metric_cutoffs Named numeric vector. Optional quality filter for models
+#' #' @param metric_cutoffs Named numeric vector. Optional quality filter for models
 #'   based on performance metrics. Models failing to meet the specified thresholds
 #'   are excluded from the SHAP analysis. Example:
-#'   \code{metric_cutoffs = c("roc_auc" = 0.75, "f_meas" = 0.60)}.
+#'   \code{metric_cutoffs = c("mcc" = 0.35, "roc_auc" = 0.75)}.
 #'   Default is \code{NULL} (no filtering). This parameter ensures that only
 #'   high-quality models contribute to the consensus biomarker ranking.
 #' @param run_da Logical. Whether to run differential abundance analysis
@@ -371,6 +371,38 @@ RUMBLE <- function(input,
   )
 
   ## ==================================================================
+  ## 3.5 Extração de Metadados de Tunagem (Hiperparâmetros e CV)
+  ## ==================================================================
+  msg("Extracting hyperparameter and cross-validation summaries...")
+
+  # 1. Tabela de Hiperparâmetros (Formato Longo para unificar modelos diferentes)
+  best_hyperparameters <- purrr::map_dfr(names(tuned), function(name) {
+    obj <- tuned[[name]]
+    if (is.null(obj) || is.null(obj$best_params)) return(NULL)
+
+    obj$best_params %>%
+      dplyr::select(-dplyr::any_of(".config")) %>%
+      dplyr::mutate(dplyr::across(dplyr::everything(), as.character)) %>%
+      tidyr::pivot_longer(cols = dplyr::everything(),
+                          names_to = "Parameter",
+                          values_to = "Value") %>%
+      dplyr::mutate(Model = name) %>%
+      dplyr::select(Model, Parameter, Value)
+  })
+
+  # 2. Tabela de Métricas da Validação Cruzada (Média e Erro Padrão entre os folds)
+  cv_metrics_summary <- purrr::map_dfr(names(tuned), function(name) {
+    obj <- tuned[[name]]
+    if (is.null(obj) || !inherits(obj$tuning_results, "tune_results")) return(NULL)
+
+    tune::collect_metrics(obj$tuning_results) %>%
+      dplyr::select(.metric, mean, std_err) %>%
+      dplyr::rename(Metric = .metric, CV_Mean = mean, CV_StdErr = std_err) %>%
+      dplyr::mutate(Model = name) %>%
+      dplyr::select(Model, Metric, CV_Mean, CV_StdErr)
+  })
+
+  ## ==================================================================
   ## 4. Evaluation
   ## ==================================================================
   msg("[4/5] Evaluating models on test set...")
@@ -487,13 +519,38 @@ RUMBLE <- function(input,
     explainable_models, train_data, outcome_var,
     class_of_interest = class_of_interest
   )
+  # ==================================================================
+  # Extração de Pesos dos Modelos (Prioridade: Bal-Accuracy > AUC)
+  # ==================================================================
+  model_weights <- purrr::map_dbl(explainable_models, function(mod) {
+    metrics_df <- mod$metrics
 
+    # 1. Tenta buscar Balanced Accuracy
+    bal_acc_row <- metrics_df[metrics_df$.metric == "bal_accuracy", ]
+    if (nrow(bal_acc_row) > 0 && !is.na(bal_acc_row$.estimate[1])) {
+      return(bal_acc_row$.estimate[1])
+    }
+
+    # 2. Fallback para ROC AUC
+    auc_row <- metrics_df[metrics_df$.metric == "roc_auc", ]
+    if (nrow(auc_row) > 0 && !is.na(auc_row$.estimate[1])) {
+      return(auc_row$.estimate[1])
+    }
+
+    # 3. Fallback final (peso neutro) caso as métricas não existam
+    return(1.0)
+  })
+
+  # Medida de segurança: impede pesos zerados ou negativos e normaliza para que a soma seja 1
+  model_weights <- pmax(model_weights, 0.01)
+  model_weights <- model_weights / sum(model_weights)
   importance <- computeFeatureImportance(
     explainers, prediction_data, outcome_var,
     class_of_interest = class_of_interest,
     top_n = top_n, repetitions = shap_reps,
     n_cores = n_cores, shap_method = shap_method,
-    verbose = verbose
+    verbose = verbose,
+    model_weights = model_weights
   )
 
   ## ==================================================================
@@ -695,10 +752,17 @@ RUMBLE <- function(input,
       paste0(prefix, "_model_metrics.tsv")
     )
     readr::write_tsv(
+      best_hyperparameters,
+      paste0(prefix, "_best_hyperparameters.tsv")
+    )
+    readr::write_tsv(
+      cv_metrics_summary,
+      paste0(prefix, "_cv_metrics.tsv")
+    )
+    readr::write_tsv(
       importance$global_importance$spearman,
       paste0(prefix, "_shap_global_spearman.tsv")
     )
-    # >>> ADICIONE ESTAS LINHAS ABAIXO <<<
     readr::write_tsv(
       integrated_table_consensus,
       paste0(prefix, "_integrated_biomarkers.tsv")
@@ -714,7 +778,6 @@ RUMBLE <- function(input,
         paste0(prefix, "_top_differential_abundance.tsv")
       )
     }
-    # >>> FIM DA ADIÇÃO <<<
 
     readr::write_tsv(
       importance$shap_top$spearman,
@@ -739,10 +802,12 @@ RUMBLE <- function(input,
     models          = final_models,
     metrics         = metrics_summary,
     importance      = importance,
+    cv_metrics       = cv_metrics_summary,
+    hyperparameters  = best_hyperparameters,
     plots           = plots,
     data            = list(train = train_data, test = test_data),
     selected_models = selected_shap_models,
     da_results      = da_results,
-    integrated_table = integrated_table_consensus # <--- Adicione esta linha
+    integrated_table = integrated_table_consensus
   )
 }

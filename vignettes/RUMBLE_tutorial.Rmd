@@ -69,7 +69,7 @@ results_fast <- RUMBLE(
   class_of_interest = "Low",
   tax_level         = "Genus",
   project_name      = "Fast_Exploration",
-  output_dir        = tempdir(),
+  output_dir        = "test",
   grid_size         = 10,
   shap_reps         = 2,
   xgb_trees         = 100,
