@@ -1,21 +1,29 @@
 Package: RUMBLE
 Type: Package
 Title: Robust Unified Microbiome Biomarker Learning Engine
-Version: 2.0.0
+Version: 3.1.0
 Authors@R: 
     person("Lucas", "Fett", email = "lucas.fett2021@gmail.com",
            role = c("aut", "cre"),
            comment = c(ORCID = "0009-0006-0596-3991"))
-Description: RUMBLE implements a consensus machine learning framework for
+Description: RUMBLE (Robust Unified Microbiome Biomarker Learning Engine)
+    implements a publication-quality consensus machine learning framework for
     identifying microbial biomarkers from high-throughput sequencing data.
-    The package integrates multiple classification algorithms via the 
-    tidymodels ecosystem, and provides model-agnostic interpretability 
-    through SHAP values and permutation importance (via DALEX). It handles 
-    compositional microbiome data using centered log-ratio (CLR) 
-    transformations. Version 1.0 introduces differential abundance analysis
-    integration with ANCOM-BC and ALDEx2 methods, enabling rigorous validation
-    of biomarker candidates with FDR control and comprehensive three-panel
-    integrated visualizations suitable for publication.
+    The package integrates multiple classification algorithms (Random Forest,
+    XGBoost, Elastic Net, KNN) via the tidymodels ecosystem with nested
+    cross-validation, and provides model-agnostic interpretability through
+    SHAP values and permutation importance (via DALEX). It handles
+    compositional microbiome data using multiplicative imputation
+    (zCompositions::cmultRepl) followed by centered log-ratio (CLR)
+    transformations with strict anti-leakage safeguards. Version 3.0
+    introduces inter-fold stability assessment, feature selection frequency
+    analysis, SHAP overfitting diagnostics (train vs test), hyperparameter
+    stability reporting, cost-sensitive learning for class imbalance,
+    Spearman-based directional metrics, and pooled out-of-fold ROC curves.
+    Descriptive direction metrics replace statistically invalid p-values on
+    SHAP correlations. Differential abundance integration with ANCOM-BC,
+    ALDEx2, and Wilcoxon methods enables rigorous multi-evidence validation
+    of biomarker candidates.
 License: GPL-3
 Encoding: UTF-8
 LazyData: false
@@ -53,8 +61,11 @@ Imports:
     scales,
     stats,
     themis,
+    zCompositions,
+    tibble,
     tidyr,
     tune,
+    utils,
     viridis,
     withr,
     workflows,
@@ -73,7 +84,8 @@ Suggests:
     kknn,
     ranger,
     xgboost,
-    magick
+    magick,
+    zCompositions
 VignetteBuilder: knitr
 BugReports: https://github.com/LucasFett/RUMBLE/issues
 URL: https://github.com/LucasFett/RUMBLE

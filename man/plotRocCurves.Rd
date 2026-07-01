@@ -2,19 +2,23 @@
 % Please edit documentation in R/plot_functions.R
 \name{plotRocCurves}
 \alias{plotRocCurves}
-\title{Plot ROC Curves for All Models}
+\title{Plot Cross-Validated ROC Curves with Variance Band}
 \usage{
 plotRocCurves(final_models, target_var)
 }
 \arguments{
-\item{final_models}{Named list of model results from the pipeline.}
+\item{final_models}{Named list of model results from the pipeline (consolidated out-of-fold structure).}
 
 \item{target_var}{Character. Name of the target variable.}
 }
 \value{
-A \code{ggplot} object.
+A \code{ggplot} object faceted by model.
 }
 \description{
-Generates ROC curves with AUC values in the legend for each model
-evaluated on the test set.
+Generates publication-quality ROC curves evaluating model performance across
+cross-validation folds. For each model, it computes the empirical ROC curve
+and AUC for each fold individually, then averages sensitivities across a standard
+false positive rate grid to display a robust mean ROC curve surrounded by a
+standard deviation (SD) variance ribbon. Individual fold paths are displayed
+as thin, semi-transparent background lines.
 }

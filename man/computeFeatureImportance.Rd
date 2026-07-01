@@ -2,7 +2,7 @@
 % Please edit documentation in R/explain_functions.R
 \name{computeFeatureImportance}
 \alias{computeFeatureImportance}
-\title{Compute Feature Importance via SHAP and Permutation (Parallelized)}
+\title{Compute Feature Importance via SHAP and Permutation}
 \usage{
 computeFeatureImportance(
   explainers,
@@ -24,8 +24,7 @@ computeFeatureImportance(
 
 \item{target_var}{Name of the target variable.}
 
-\item{class_of_interest}{Character. The class of interest (must be the second
-factor level). SHAP values will be calculated with respect to this class.}
+\item{class_of_interest}{Character. The class of interest.}
 
 \item{top_n}{Number of top features to retain (default 20).}
 
@@ -34,20 +33,20 @@ factor level). SHAP values will be calculated with respect to this class.}
 
 \item{n_cores}{Number of cores for parallel processing (default 1).}
 
-\item{shap_method}{Character. Method for SHAP calculation. Options are
-\code{"exact"} (default, uses DALEX for rigorous SHAP values) or
-\code{"fast"} (uses fastshap package for faster approximation).
-The exact method is recommended for publication-quality results.}
+\item{shap_method}{Character. Method for SHAP calculation: \code{"exact"}
+or \code{"fast"}.}
 
 \item{verbose}{Logical. Whether to print progress messages.}
+
+\item{model_weights}{Named numeric vector of model weights for consensus.}
 }
 \value{
 A named list containing:
 \itemize{
 \item \code{permutation_raw}: Raw permutation importance data.
 \item \code{permutation_top}: Top features by permutation importance.
-\item \code{shap_raw}: Raw SHAP values.
-\item \code{shap_top}: Top features by SHAP values.
+\item \code{shap_raw}: Raw SHAP values (unscaled).
+\item \code{shap_top}: Top features by SHAP values per model.
 \item \code{global_importance}: Consensus importance across models.
 }
 }
@@ -55,23 +54,9 @@ A named list containing:
 Calculates SHAP values and permutation importance using parallel processing.
 Supports both exact SHAP (via DALEX) and fast approximation (via fastshap).
 }
-\examples{
-  # ... (Assume 'explainers' and 'df' created as in createExplainers example)
-  # For demonstration, we run with low repetitions
-
-  if (exists("explainers") && exists("df")) {
-    importance <- computeFeatureImportance(
-      explainers = explainers,
-      data = df,
-      target_var = "Group",
-      class_of_interest = "B",
-      top_n = 5,
-      repetitions = 2,  # Low for speed
-      n_cores = 1,
-      shap_method = "exact"
-    )
-
-    head(importance$global_importance)
-  }
-
+\details{
+\strong{Methodological Note:} SHAP values are returned as raw (unscaled)
+contributions. No per-fold normalization is applied to avoid distorting the
+consensus. Direction is computed as a descriptive metric (mean SHAP for
+observations above the feature median), NOT as a hypothesis test.
 }

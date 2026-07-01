@@ -2,7 +2,7 @@
 % Please edit documentation in R/explain_functions.R
 \name{createExplainers}
 \alias{createExplainers}
-\title{Create DALEX Explainers for Trained Models}
+\title{Create DALEX Explainer Objects}
 \usage{
 createExplainers(final_models, data, target_var, class_of_interest)
 }
@@ -21,36 +21,4 @@ A list of DALEX explainer objects, one for each model.
 }
 \description{
 Wraps each fitted tidymodels workflow into a DALEX explainer object.
-}
-\examples{
-  library(parsnip)
-  library(workflows)
-  library(dplyr)
-
-  # 1. Create synthetic data
-  set.seed(123)
-  df <- data.frame(
-    X1 = rnorm(50),
-    X2 = rnorm(50),
-    Group = factor(rep(c("A", "B"), each = 25))
-  )
-
-  # 2. Train a simple model
-  model <- rand_forest(mode = "classification") \%>\%
-    set_engine("ranger") \%>\%
-    fit(Group ~ ., data = df)
-
-  # 3. Mock the RUMBLE output structure
-  # (createExplainers expects a list where each element has $model_fit)
-  final_models <- list(
-    RF = list(model_fit = model)
-  )
-
-  # 4. Create Explainers
-  explainers <- createExplainers(final_models, df, "Group",
-                                 class_of_interest = "B")
-
-  # Check class
-  class(explainers$RF)
-
 }

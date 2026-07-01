@@ -12,6 +12,7 @@ prepareData(
   min_abundance = 1e-04,
   pseudocount = 1e-06,
   remove_unclassified = FALSE,
+  unclassified_patterns = "uncultured|unknown|unclassified",
   normalization_method = "clr",
   verbose = TRUE
 )
@@ -35,17 +36,23 @@ taxon must be present to be retained (default 0.05, i.e., 5 percent).}
 consider a taxon as present in a sample (default 0.0001).}
 
 \item{pseudocount}{Numeric. Small value added before CLR transformation
-to handle zeros (default 1e-6).}
+to handle exact zeros (default 1e-6).}
 
 \item{remove_unclassified}{Logical. If \code{TRUE}, removes taxa whose
-names contain patterns such as \code{"uncultured"}, \code{"unknown"},
-\code{"unclassified"}, or \code{"_"}. Default is \code{FALSE}.}
+names match the pattern defined in \code{unclassified_patterns}.
+Default is \code{FALSE}.}
+
+\item{unclassified_patterns}{Character or \code{NULL}. A regular expression
+pattern used to identify unclassified or invalid taxa names. Only used
+when \code{remove_unclassified = TRUE}. Default is
+\code{"uncultured|unknown|unclassified"}.}
 
 \item{normalization_method}{Character. Method for compositional normalization.
 Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
-The CLR transformation is recommended for all tree-based machine learning
-algorithms (Random Forest, XGBoost) as it preserves mathematical monotonicity
-and ensures proper feature importance calculations via SHAP values.}
+The CLR transformation is recommended for all machine learning
+algorithms (Random Forest, XGBoost, KNN, ENET) as it preserves mathematical
+monotonicity and ensures proper feature importance calculations via SHAP
+values.}
 
 \item{verbose}{Logical. If \code{TRUE} (default), prints progress messages.}
 }
@@ -54,45 +61,28 @@ A named list with five elements:
 \itemize{
 \item \code{features}: A data.frame of normalized abundances (samples x taxa).
 \item \code{metadata}: A data.frame of sample metadata aligned with features.
-\item \code{filtered_counts}: A data.frame of raw/relative abundances (before CLR transformation) after prevalence filtering.
+\item \code{filtered_counts}: A data.frame of raw/relative abundances
+(before CLR transformation) after prevalence filtering.
 \item \code{n_taxa_removed}: Integer. Total number of taxa removed.
 \item \code{n_samples}: Integer. Number of samples in the final dataset.
 }
 }
 \description{
 Performs standard preprocessing for biomarker analysis: optional taxonomic
-aggregation, optional removal of unclassified taxa, prevalence filtering,
-NA imputation, and centered log-ratio (CLR) transformation.
+aggregation, optional removal of unclassified taxa via user-defined patterns,
+prevalence filtering, NA imputation, and centered log-ratio (CLR)
+transformation.
 }
 \details{
 The preprocessing pipeline follows these steps:
 \enumerate{
 \item Convert input to a \code{phyloseq} object (if not already).
 \item Aggregate taxa at the specified taxonomic level (optional).
-\item Remove unclassified/invalid taxa names (optional).
+\item Remove unclassified/invalid taxa names using user-defined patterns
+(optional).
 \item Sanitise taxa names with \code{make.names()} for ML compatibility.
 \item Impute \code{NA} values with zero.
 \item Convert to relative abundance and filter by prevalence.
-\item Apply CLR transformation.
+\item Apply CLR transformation with a pseudocount.
 }
-}
-\examples{
-  # Load example data provided by the package
-  ps_path <- system.file("extdata", "PRJEB38465_phyloseq_com_metadados_completos.rds",
-                         package = "RUMBLE")
-
-  # Check if file exists (just in case)
-  if (file.exists(ps_path)) {
-    ps <- readRDS(ps_path)
-
-    # Run preprocessing with default CLR
-    prep <- prepareData(ps, tax_level = "Genus", min_prevalence = 0.1)
-
-
-
-    # Check results
-    head(prep$features[, 1:5])
-  }
-
-
 }

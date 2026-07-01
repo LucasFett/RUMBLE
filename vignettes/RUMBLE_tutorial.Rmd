@@ -91,6 +91,18 @@ knitr::kable(
 )
 ```
 
+# Nested Cross-Validation & Generalization Gap
+
+RUMBLE 3.1.0 ensures strict extraction of validation metrics from the exact hyperparameter configuration that won the inner CV loop. This allows for an accurate estimation of inner-fold performance.
+
+You can inspect the `cv_metrics` table to see the performance during hyperparameter tuning:
+
+```{r cv_metrics}
+head(results_fast$cv_metrics)
+```
+
+By comparing these inner metrics with the outer-fold test metrics (`results_fast$metrics`), you can rigorously assess the Generalization Gap and diagnose potential model overfitting.
+
 # Global Results
 
 ## Metrics Comparison

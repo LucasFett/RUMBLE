@@ -21,115 +21,208 @@
 #' @importFrom patchwork wrap_plots
 NULL
 
+#' Select and Standardize Importance Table
+#'
+#' Internal helper to filter importance tables by model and standardize the
+#' importance column name for plotting functions.
+#'
+#' @param importance_df Data.frame of feature importances.
+#' @param model Character or NULL. Model name to filter by.
+#' @return Data.frame with standardized `importance_value` column.
+#' @noRd
+.selectImportanceTable <- function(importance_df, model = NULL) {
+  df <- importance_df
 
-#' Plot ROC Curves for All Models
+  # Filtra pelo modelo, se solicitado
+  if (!is.null(model)) {
+    if (!"model" %in% colnames(df)) {
+      stop("Cannot filter by model: 'model' column not found in importance table.")
+    }
+    df <- df[df$model == model, , drop = FALSE]
+  }
+
+  # Padroniza o nome da coluna de importância para os gráficos
+  if ("mean_abs_contribution" %in% colnames(df)) {
+    df$importance_value <- df$mean_abs_contribution
+  } else if ("contribution" %in% colnames(df)) {
+    df$importance_value <- abs(df$contribution)
+  } else {
+    stop("Could not find a valid importance column (expected 'mean_abs_contribution').")
+  }
+
+  # Padroniza a direção (Rho)
+  if ("SHAP_Rho" %in% colnames(df)) {
+    df$direction <- df$SHAP_Rho
+  } else if (!"direction" %in% colnames(df)) {
+    df$direction <- 0
+  }
+
+  return(df)
+}
+
+#' Plot Cross-Validated ROC Curves with Variance Band
 #'
-#' Generates ROC curves with AUC values in the legend for each model
-#' evaluated on the test set.
+#' Generates publication-quality ROC curves evaluating model performance across
+#' cross-validation folds. For each model, it computes the empirical ROC curve
+#' and AUC for each fold individually, then averages sensitivities across a standard
+#' false positive rate grid to display a robust mean ROC curve surrounded by a
+#' standard deviation (SD) variance ribbon. Individual fold paths are displayed
+#' as thin, semi-transparent background lines.
 #'
-#' @param final_models Named list of model results from the pipeline.
+#' @param final_models Named list of model results from the pipeline (consolidated out-of-fold structure).
 #' @param target_var Character. Name of the target variable.
 #'
-#' @return A \code{ggplot} object.
+#' @return A \code{ggplot} object faceted by model.
 #'
 #' @export
 plotRocCurves <- function(final_models, target_var) {
-  roc_data <- purrr::imap_dfr(final_models, function(obj, name) {
+
+  grid_fpr <- seq(0, 1, by = 0.01)
+
+  fold_roc_list <- list()
+  auc_summary_list <- list()
+
+  for (model_name in names(final_models)) {
+    obj <- final_models[[model_name]]
     df <- obj$predictions
+
+    if (!is.factor(df[[target_var]])) {
+      df[[target_var]] <- as.factor(df[[target_var]])
+    }
+
     pos_class <- levels(df[[target_var]])[2L]
     prob_col  <- paste0(".pred_", pos_class)
 
-    roc_tbl <- yardstick::roc_curve(
-      df,
-      truth = !!rlang::sym(target_var),
-      !!rlang::sym(prob_col),
-      event_level = "second"
-    )
+    folds <- unique(df$fold)
+    if (is.null(folds)) folds <- 1
 
-    auc_val <- yardstick::roc_auc(
-      df,
-      truth = !!rlang::sym(target_var),
-      !!rlang::sym(prob_col),
-      event_level = "second"
-    )$.estimate
+    for (f in folds) {
+      df_fold <- df[df$fold == f, , drop = FALSE]
 
-    roc_tbl$model <- name
-    roc_tbl$auc   <- auc_val
-    roc_tbl
-  })
+      if (length(unique(df_fold[[target_var]])) < 2 || nrow(df_fold) < 2) next
 
-  auc_labels <- roc_data %>%
-    dplyr::group_by(model) %>%
+      # Calcula a curva ROC específica deste fold
+      curve_fold <- yardstick::roc_curve(
+        df_fold,
+        truth = !!rlang::sym(target_var),
+        !!rlang::sym(prob_col),
+        event_level = "second"
+      )
+
+      # Calcula a AUC específica deste fold
+      auc_fold <- yardstick::roc_auc(
+        df_fold,
+        truth = !!rlang::sym(target_var),
+        !!rlang::sym(prob_col),
+        event_level = "second"
+      )$.estimate
+
+      fpr_raw <- 1 - curve_fold$specificity
+      tpr_raw <- curve_fold$sensitivity
+
+      # Ordenação rigorosa para garantir o funcionamento da interpolação linear
+      ord <- order(fpr_raw)
+      fpr_raw <- fpr_raw[ord]
+      tpr_raw <- tpr_raw[ord]
+
+      # Interpola as sensibilidades para o grid padronizado de FPR
+      interp_tpr <- stats::approx(x = fpr_raw, y = tpr_raw, xout = grid_fpr, ties = max)$y
+
+      fold_roc_list[[length(fold_roc_list) + 1]] <- data.frame(
+        model = model_name,
+        fold = f,
+        fpr = grid_fpr,
+        tpr = interp_tpr
+      )
+
+      auc_summary_list[[length(auc_summary_list) + 1]] <- data.frame(
+        model = model_name,
+        fold = f,
+        auc = auc_fold
+      )
+    }
+  }
+
+  if (length(fold_roc_list) == 0) {
+    return(ggplot2::ggplot() + ggplot2::theme_void() + ggplot2::labs(title = "No ROC data available"))
+  }
+
+  df_folds_roc <- dplyr::bind_rows(fold_roc_list)
+  df_auc <- dplyr::bind_rows(auc_summary_list)
+
+  # Agrega os resultados para calcular a média e desvio padrão ponto a ponto
+  df_mean_roc <- df_folds_roc %>%
+    dplyr::group_by(model, fpr) %>%
     dplyr::summarize(
-      AUC = unique(round(auc, 2L)),
+      mean_tpr = mean(tpr, na.rm = TRUE),
+      sd_tpr = sd(tpr, na.rm = TRUE),
       .groups = "drop"
     ) %>%
     dplyr::mutate(
-      label = paste0(model, " (AUC = ", AUC, ")")
+      # Restringe os limites matemáticos para não estourarem o espaço biológico [0,1]
+      ymin = pmax(0, mean_tpr - sd_tpr),
+      ymax = pmin(1, mean_tpr + sd_tpr)
     )
 
-  roc_data <- dplyr::left_join(roc_data, auc_labels, by = "model")
-
-  ggplot2::ggplot(
-    roc_data,
-    ggplot2::aes(
-      x = 1 - specificity, y = sensitivity,
-      color = label
+  # Gera as métricas de sumário (Média ± SD) da AUC entre os folds externos
+  df_auc_stats <- df_auc %>%
+    dplyr::group_by(model) %>%
+    dplyr::summarize(
+      mean_auc = mean(auc, na.rm = TRUE),
+      sd_auc = sd(auc, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::mutate(
+      label = paste0(model, " (AUC = ", sprintf("%.3f", mean_auc), " \u00b1 ", sprintf("%.3f", sd_auc), ")")
     )
-  ) +
-    ggplot2::geom_path(linewidth = 1) +
-    ggplot2::geom_abline(
-      linetype = "dashed", color = "gray50"
+
+  df_mean_roc <- dplyr::left_join(df_mean_roc, df_auc_stats, by = "model")
+  df_folds_roc <- dplyr::left_join(df_folds_roc, df_auc_stats, by = "model")
+
+  p <- ggplot2::ggplot() +
+    # Linha diagonal de referência (classificador aleatório)
+    ggplot2::geom_abline(linetype = "dashed", color = "gray60", linewidth = 0.5) +
+    # Banda de variância (Sombreamento do Desvio Padrão)
+    ggplot2::geom_ribbon(
+      data = df_mean_roc,
+      ggplot2::aes(x = fpr, ymin = ymin, ymax = ymax, fill = model),
+      alpha = 0.15, inherit.aes = FALSE
     ) +
+    # Caminhos individuais de cada fold (linhas finas e claras em background)
+    ggplot2::geom_line(
+      data = df_folds_roc,
+      ggplot2::aes(x = fpr, y = tpr, group = interaction(model, fold), color = model),
+      linewidth = 0.4, alpha = 0.35
+    ) +
+    # Curva média consolidada do modelo (linha espessa em destaque)
+    ggplot2::geom_line(
+      data = df_mean_roc,
+      ggplot2::aes(x = fpr, y = mean_tpr, color = model),
+      linewidth = 1.2
+    ) +
+    ggplot2::facet_wrap(~ label) +
     ggsci::scale_color_nejm() +
-    ggplot2::coord_equal() +
+    ggsci::scale_fill_nejm() +
+    # Pequena folga (-0.01 a 1.01) para resolver definitivamente o corte visual nas bordas
+    ggplot2::scale_x_continuous(limits = c(-0.01, 1.01), expand = c(0, 0), breaks = seq(0, 1, 0.2)) +
+    ggplot2::scale_y_continuous(limits = c(-0.01, 1.01), expand = c(0, 0), breaks = seq(0, 1, 0.2)) +
     ggplot2::labs(
-      title = "ROC Curves",
-      subtitle = paste("Target:", target_var),
-      x = "1 - Specificity", y = "Sensitivity",
-      color = "Model"
+      title = "Cross-Validated ROC Curves by Model",
+      subtitle = paste("Target:", target_var, "| Shaded area represents mean \u00b1 SD across folds"),
+      x = "False Positive Rate (1 - Specificity)",
+      y = "True Positive Rate (Sensitivity)"
     ) +
-    ggplot2::theme_minimal(base_size = 12)
-}
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      legend.position = "none",
+      panel.spacing = ggplot2::unit(1.2, "lines"),
+      strip.text = ggplot2::element_text(face = "bold", size = 10.5),
+      panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold")
+    ) +
+    ggplot2::coord_fixed()
 
-
-.selectImportanceTable <- function(importance_df, model = NULL) {
-  if (!all(c("variable", "direction") %in% colnames(importance_df))) {
-    stop("Importance table must contain at least 'variable' and 'direction' columns.")
-  }
-
-  score_col <- NULL
-  if ("mean_abs_contribution" %in% colnames(importance_df)) {
-    score_col <- "mean_abs_contribution"
-  }
-  if (is.null(score_col)) {
-    stop("Importance table must contain 'mean_abs_contribution'.")
-  }
-
-  has_model <- "model" %in% colnames(importance_df)
-
-  if (!has_model) {
-    if (!is.null(model) && !identical(model, "consensus")) {
-      stop("This importance table does not contain per-model results. Use the consensus table or provide a table with a 'model' column.")
-    }
-    out <- importance_df
-    out$model <- "Consensus"
-  } else {
-    out <- importance_df
-    if (!is.null(model)) {
-      available_models <- unique(out$model)
-      if (!all(model %in% available_models)) {
-        stop(
-          "Invalid model selection. Available models: ",
-          paste(available_models, collapse = ", ")
-        )
-      }
-      out <- out[out$model %in% model, , drop = FALSE]
-    }
-  }
-
-  out$importance_value <- out[[score_col]]
-  out
+  return(p)
 }
 
 #' Plot Global SHAP Consensus or Model-Specific SHAP Profiles
@@ -172,19 +265,13 @@ plotShapGlobal <- function(global_importance, target_var,
     dplyr::arrange(dplyr::desc(importance_value)) %>%
     dplyr::slice_head(n = top_n)
 
-  # Garante que a coluna de significância exista, caso seja chamada com dados antigos
-  if (!"significance" %in% colnames(df_plot)) {
-    df_plot$significance <- ""
-  }
-
   df_plot$directional_value <- ifelse(
     df_plot$direction < 0,
     df_plot$importance_value * -1,
     df_plot$importance_value
   )
 
-  # Adiciona o asterisco ao nome da variável
-  df_plot$label_with_sig <- paste0(df_plot$variable, df_plot$significance)
+  df_plot$label_with_sig <- df_plot$variable
 
   plot_title <- if (is.null(model)) {
     paste0("Biomarker Consensus (", metric_name, ")")
@@ -195,13 +282,12 @@ plotShapGlobal <- function(global_importance, target_var,
   ggplot2::ggplot(
     df_plot,
     ggplot2::aes(
-      x = reorder(label_with_sig, importance_value),
+      x = stats::reorder(label_with_sig, importance_value),
       y = directional_value, fill = direction
     )
   ) +
     ggplot2::geom_col(width = 0.8) +
     ggplot2::coord_flip() +
-    # O gradiente agora recebe o Rho contínuo. Valores próximos a 0 ficarão cinzas.
     ggplot2::scale_fill_gradient2(
       low = "#1f77b4", mid = "gray85", high = "#d62728",
       midpoint = 0, limits = c(-1, 1),
@@ -209,21 +295,25 @@ plotShapGlobal <- function(global_importance, target_var,
     ) +
     ggplot2::labs(
       x = NULL,
-      # Rótulo dinâmico dependendo se é consenso ou modelo isolado
       y = if (is.null(model)) paste0("Normalized SHAP Score (", metric_name, ")") else paste0("Raw SHAP Score (", metric_name, ")"),
       title = plot_title,
+      # Inserida quebra de linha (\n) para evitar o corte do texto
       subtitle = paste0(
         target_var, ": <- ", negative_class,
-        " | ", class_of_interest, " ->\n(* FDR < 0.05)"
+        " | ", class_of_interest, " ->\n(Direction: Spearman \u03c1 between abundance\nand SHAP impact)"
       )
     ) +
-    ggplot2::theme_minimal(base_size = 12)
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(face = "bold"),
+      plot.margin = ggplot2::margin(t = 10, r = 15, b = 10, l = 10) # Margem de segurança
+    )
 }
 
-#' Plot Confusion Matrices
+#' Plot Confusion Matrices (Pooled Out-of-Fold)
 #'
 #' Displays confusion matrices as heatmaps with absolute counts and
-#' proportions for each model.
+#' proportions for each model using pooled Out-of-Fold (OOF) predictions.
 #'
 #' @param final_models Named list of model results.
 #' @param target_var Character. Name of the target variable.
@@ -270,13 +360,15 @@ plotConfusionMatrices <- function(final_models, target_var) {
     ) +
     ggplot2::scale_color_identity() +
     ggplot2::labs(
-      title = "Confusion Matrices (Test Set)",
+      title = "Pooled Out-of-Fold Confusion Matrices",
+      subtitle = "Aggregated predictions from external validation folds across Nested CV",
       x = "Predicted", y = "Actual"
     ) +
     ggplot2::theme_minimal(base_size = 12) +
     ggplot2::theme(
       panel.grid = ggplot2::element_blank(),
-      axis.text = ggplot2::element_text(color = "black")
+      axis.text = ggplot2::element_text(color = "black"),
+      plot.title = ggplot2::element_text(face = "bold")
     )
 }
 
@@ -366,9 +458,7 @@ plotShapBeeswarm <- function(shap_raw, prediction_data = NULL, target_var = NULL
     dplyr::pull(variable)
 
   shap_filtered <- shap_raw %>%
-    dplyr::filter(variable %in% top_features) %>%
-    # Remover contribuições zeradas para despoluir a visualização central
-    dplyr::filter(contribution != 0)
+    dplyr::filter(variable %in% top_features)
 
   # Normalizar feature values (Min-Max scaling por taxon)
   shap_filtered <- shap_filtered %>%
@@ -597,49 +687,39 @@ plotBiomarkerIntegrated <- function(filtered_counts,
   method_full <- ifelse(is.null(da_results$Method[1]), "DA", da_results$Method[1])
 
   # ==================================================================
-  # 1. Preparar dados com Significância e Rótulos Refinados
+  # 1. Preparar dados
   # ==================================================================
   importance_full <- .selectImportanceTable(global_importance, model = model)
 
-  # Garantir que temos as colunas de significância (caso venha de um objeto antigo)
-  if (!"significance" %in% colnames(importance_full)) importance_full$significance <- ""
   if (!"direction" %in% colnames(importance_full)) importance_full$direction <- 0
 
-  # Criar o rótulo com asterisco para o eixo Y
   importance_full <- importance_full %>%
-    dplyr::mutate(label_with_sig = paste0(variable, significance))
+    dplyr::mutate(label_with_sig = variable)
 
-  # Definir a ordem baseada na importância (SHAP Score)
-  # Usamos ordem ascendente aqui pois o ggplot empilha fatores de baixo para cima
   taxa_data_top <- importance_full %>%
     dplyr::filter(variable != "TOTAL_SHAP") %>%
     dplyr::slice_max(order_by = importance_value, n = top_n, with_ties = FALSE) %>%
     dplyr::arrange(importance_value)
 
-  # A CORREÇÃO CRÍTICA AQUI: Travar a coluna como Fator na ordem exata da importância
   taxa_data_top$label_with_sig <- factor(taxa_data_top$label_with_sig, levels = taxa_data_top$label_with_sig)
 
   taxa_order_labels <- levels(taxa_data_top$label_with_sig)
   taxa_order_original <- taxa_data_top$variable
 
-  # Criar mapeamento para sincronizar os outros painéis (B, C e D)
   sig_map <- stats::setNames(taxa_data_top$label_with_sig, taxa_data_top$variable)
 
   ## ==================================================================
-  ## Painel A: ML Importance (SHAP + Rho Contínuo + Direção)
+  ## Painel A: ML Importance
   ## ==================================================================
   msg("  - Generating Panel A (ML Importance with directional bars)...")
 
-  # Criar o valor direcional: inverte o SHAP Score se o Rho for negativo
   taxa_data_top <- taxa_data_top %>%
     dplyr::mutate(
       directional_value = ifelse(direction < 0, importance_value * -1, importance_value)
     )
 
-  # Calcular o limite máximo para deixar o eixo X simétrico (zero no centro)
   max_imp <- max(abs(taxa_data_top$directional_value), na.rm = TRUE)
 
-  # Como label_with_sig agora é um fator, o ggplot respeitará a ordem (Maior no topo)
   p_imp <- ggplot2::ggplot(taxa_data_top, ggplot2::aes(x = directional_value, y = label_with_sig, fill = direction)) +
     ggplot2::geom_col(color = "black", linewidth = 0.3, width = 0.7) +
     ggplot2::scale_fill_gradient2(
@@ -647,16 +727,13 @@ plotBiomarkerIntegrated <- function(filtered_counts,
       midpoint = 0, limits = c(-1, 1),
       name = paste0(metric_name, " (\u03c1)")
     ) +
-    # Adicionar linha tracejada no zero
     ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.5) +
     ggplot2::labs(
       title = "A. ML Importance",
-      # Subtítulo dinâmico
       subtitle = if (is.null(model)) "Normalized Directional SHAP" else "Raw Directional SHAP",
       x = "Importance",
       y = NULL
     ) +
-    # Eixo X simétrico com uma margem de 5%
     ggplot2::scale_x_continuous(limits = c(-max_imp * 1.05, max_imp * 1.05)) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.y = ggplot2::element_text(size = 9, face = "italic"),
@@ -665,7 +742,7 @@ plotBiomarkerIntegrated <- function(filtered_counts,
                    plot.subtitle = ggplot2::element_text(size = 9, color = "gray30"))
 
   ## ==================================================================
-  ## Painel B: Taxa Prevalence (Sincronizado)
+  ## Painel B: Taxa Prevalence
   ## ==================================================================
   msg("  - Generating Panel B (Taxa Prevalence)...")
 
@@ -680,7 +757,6 @@ plotBiomarkerIntegrated <- function(filtered_counts,
     data.frame(variable = names(prev), prevalence = as.numeric(prev), group = lvl)
   }) %>% dplyr::bind_rows()
 
-  # Aplicar rótulos com asteriscos e ordem
   df_prev$label_with_sig <- sig_map[df_prev$variable]
   df_prev$label_with_sig <- factor(df_prev$label_with_sig, levels = taxa_order_labels)
 
@@ -695,7 +771,7 @@ plotBiomarkerIntegrated <- function(filtered_counts,
                    plot.title = ggplot2::element_text(size = 11, face = "bold"))
 
   ## ==================================================================
-  ## Painéis C & D: Differential Abundance
+  ## Painéis C & D: Differential Abundance (Reintegrado)
   ## ==================================================================
   if (show_da) {
     da_plot_data <- da_results %>%
@@ -703,17 +779,12 @@ plotBiomarkerIntegrated <- function(filtered_counts,
       dplyr::mutate(
         label_with_sig = factor(sig_map[Taxon], levels = taxa_order_labels),
         neg_log_fdr = -log10(ifelse(adj_p_val == 0, 1e-16, adj_p_val)),
-        # Nova coluna para definir a direção discreta do Log2FC
         fc_direction = ifelse(logFC > 0, "Positive", "Negative")
       )
 
     p_fc <- ggplot2::ggplot(da_plot_data, ggplot2::aes(x = logFC, y = label_with_sig, fill = fc_direction)) +
       ggplot2::geom_col(color = "black", linewidth = 0.3, width = 0.7) +
-      # Escala manual com cores discretas e remoção da legenda
-      ggplot2::scale_fill_manual(
-        values = c("Positive" = "#d62728", "Negative" = "#1f77b4"),
-        guide = "none"
-      ) +
+      ggplot2::scale_fill_manual(values = c("Positive" = "#d62728", "Negative" = "#1f77b4"), guide = "none") +
       ggplot2::geom_vline(xintercept = 0, linetype = "dashed") +
       ggplot2::labs(title = "C. Effect Size", subtitle = method_full, x = "Log2FC", y = NULL) +
       ggplot2::theme_minimal() +
@@ -729,19 +800,19 @@ plotBiomarkerIntegrated <- function(filtered_counts,
       ggplot2::theme(axis.text.y = ggplot2::element_blank(),
                      panel.grid.major.y = ggplot2::element_blank(),
                      plot.title = ggplot2::element_text(size = 11, face = "bold"))
+
+    plot_list <- list(p_imp, p_prev, p_fc, p_sig)
+    plot_layout <- patchwork::plot_layout(widths = c(1.5, 1, 1, 0.8), guides = "collect")
   } else {
     p_fc <- ggplot2::ggplot() + ggplot2::theme_void()
-    p_sig <- ggplot2::ggplot() + ggplot2::theme_void()
+    plot_list <- list(p_imp, p_prev, p_fc)
+    plot_layout <- patchwork::plot_layout(widths = c(1.5, 1, 1), guides = "collect")
   }
 
   ## ==================================================================
-  ## Assemblage with Unified Theme
+  ## Assemblage
   ## ==================================================================
-  msg("Assembling 4-panel dashboard plot...")
-
-  plot_list <- list(p_imp, p_prev, p_fc, p_sig)
-
-  plot_layout <- patchwork::plot_layout(widths = c(1.5, 1, 1, 0.8), guides = "collect")
+  msg("Assembling dashboard plot...")
 
   annotation_title <- if (is.null(model)) {
     "Integrated Biomarker Dashboard"
@@ -752,7 +823,7 @@ plotBiomarkerIntegrated <- function(filtered_counts,
   composite_plot <- patchwork::wrap_plots(plot_list) + plot_layout +
     patchwork::plot_annotation(
       title = annotation_title,
-      subtitle = "(* Taxa with significant Spearman correlation, FDR < 0.05)",
+      subtitle = "Direction: Spearman correlation (\u03c1) between abundance and SHAP impact",
       theme = ggplot2::theme(plot.title = ggplot2::element_text(size = 15, face = "bold", margin = ggplot2::margin(b = 10)))
     ) &
     ggplot2::theme(legend.position = "bottom",
@@ -860,10 +931,9 @@ getIntegratedBiomarkerTable <- function(filtered_counts,
       Taxon = variable,
       Direction_Class = ifelse(direction > 0, class_of_interest, negative_class),
       SHAP_Score = importance_value,
-      SHAP_Rho = direction,
-      SHAP_FDR = adj_p_val
+      Direction = direction
     ) %>%
-    dplyr::select(Taxon, SHAP_Score, Direction_Class, SHAP_Rho, SHAP_FDR)
+    dplyr::select(Taxon, SHAP_Score, Direction_Class, Direction)
 
   # 2. Prevalence
   groups <- metadata[[target_var]]
@@ -895,13 +965,14 @@ getIntegratedBiomarkerTable <- function(filtered_counts,
   if (!is.null(da_results)) {
     da_subset <- da_results %>%
       dplyr::filter(Taxon %in% df_integrated$Taxon) %>%
-      dplyr::select(Taxon, logFC, p_val, adj_p_val)
+      dplyr::select(Taxon, logFC, p_val, adj_p_val) %>%
+      dplyr::rename(DA_logFC = logFC, DA_p_val = p_val, DA_adj_p_val = adj_p_val)
 
     df_integrated <- dplyr::left_join(df_integrated, da_subset, by = "Taxon")
   } else {
-    df_integrated$logFC <- NA
-    df_integrated$p_val <- NA
-    df_integrated$adj_p_val <- NA
+    df_integrated$DA_logFC <- NA
+    df_integrated$DA_p_val <- NA
+    df_integrated$DA_adj_p_val <- NA
   }
 
   # Ensure order matches the plot (descending importance)
@@ -909,4 +980,232 @@ getIntegratedBiomarkerTable <- function(filtered_counts,
     dplyr::arrange(match(Taxon, taxa_order))
 
   return(df_integrated)
+}
+
+#' Plot Explainability Stability (Train vs Test SHAP Correlation)
+#'
+#' Creates a grouped bar chart displaying the Spearman and Kendall correlations
+#' between the feature importance rankings of the training and test sets.
+#'
+#' @param shap_overfitting A data.frame containing the stability metrics
+#'   (output of evaluateExplainabilityOverfitting).
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @export
+plotShapStability <- function(shap_overfitting) {
+
+  # Transforma os dados para o formato longo exigido pelo ggplot2
+  df_long <- shap_overfitting %>%
+    tidyr::pivot_longer(
+      cols = c("spearman_train_test", "kendall_train_test"),
+      names_to = "Metric",
+      values_to = "Correlation"
+    ) %>%
+    dplyr::mutate(
+      Metric = ifelse(Metric == "spearman_train_test", "Spearman", "Kendall")
+    )
+
+  # Remove NAs caso algum modelo tenha falhado na correlação
+  df_long <- df_long[!is.na(df_long$Correlation), ]
+
+  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = Correlation, y = stats::reorder(model, Correlation), fill = Metric)) +
+    ggplot2::geom_bar(stat = "identity", position = ggplot2::position_dodge(width = 0.8), width = 0.7) +
+    ggplot2::geom_vline(xintercept = 0.7, linetype = "dashed", color = "red", alpha = 0.6, linewidth = 1) +
+    ggsci::scale_fill_nejm() +
+    ggplot2::labs(
+      title = "Explainability Stability (Train vs Test)",
+      subtitle = "SHAP ranking correlation. Higher values indicate better generalization.\nRed line indicates a 0.70 stability threshold.",
+      x = "Correlation Coefficient",
+      y = "Model",
+      fill = "Metric"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::coord_cartesian(xlim = c(0, 1)) +
+    ggplot2::theme(
+      legend.position = "bottom",
+      panel.grid.minor = ggplot2::element_blank()
+    )
+
+  return(p)
+}
+#' Plot Inter-Model Consistency Matrix
+#'
+#' Generates a tile plot (heatmap) showing the Spearman correlation between
+#' the feature importance signatures of different models.
+#'
+#' @param consistency_df Output from evaluateInterModelConsistency.
+#'
+#' @return A \code{ggplot} object or NULL if not enough models.
+#' @export
+plotInterModelConsistency <- function(consistency_df) {
+  if (is.null(consistency_df) || nrow(consistency_df) == 0) return(NULL)
+
+  # Cria uma matriz simétrica espelhando os pares
+  mirror <- consistency_df %>%
+    dplyr::rename(Model_A = Model_B, Model_B = Model_A)
+
+  self <- data.frame(
+    Model_A = unique(c(consistency_df$Model_A, consistency_df$Model_B)),
+    Model_B = unique(c(consistency_df$Model_A, consistency_df$Model_B)),
+    Jaccard = 1.0,
+    Spearman = 1.0
+  )
+
+  df_plot <- dplyr::bind_rows(consistency_df, mirror, self)
+
+  p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = Model_A, y = Model_B, fill = Spearman)) +
+    ggplot2::geom_tile(color = "white", linewidth = 1) +
+    ggplot2::geom_text(ggplot2::aes(label = round(Spearman, 2)), color = "black", size = 5) +
+    ggplot2::scale_fill_gradient2(low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0, limit = c(-1, 1)) +
+    ggplot2::labs(
+      title = "Inter-Model Signature Consistency",
+      subtitle = "Spearman correlation of global SHAP rankings",
+      x = NULL, y = NULL, fill = "Spearman\nRho"
+    ) +
+    ggplot2::theme_minimal(base_size = 14) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)
+    ) +
+    ggplot2::coord_fixed()
+
+  return(p)
+}
+
+
+#' Plot Out-of-Fold Predicted Probability Density
+#'
+#' Displays the distribution of predicted probabilities from the held-out
+#' test folds, separated by true class. This reveals calibration issues and
+#' class separability that aggregate metrics cannot capture.
+#'
+#' @param final_models Named list of model results with predictions.
+#' @param target_var Character. Name of the target variable.
+#'
+#' @return A \code{ggplot} object faceted by model.
+#'
+#' @export
+plotOOFDensity <- function(final_models, target_var) {
+  # Collect all OOF predictions
+  df_all <- purrr::imap_dfr(final_models, function(obj, name) {
+    preds <- obj$predictions
+    pos_class <- levels(preds[[target_var]])[2L]
+    prob_col <- paste0(".pred_", pos_class)
+
+    if (!prob_col %in% colnames(preds)) return(NULL)
+
+    data.frame(
+      model = name,
+      probability = preds[[prob_col]],
+      true_class = as.character(preds[[target_var]]),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  if (nrow(df_all) == 0) return(NULL)
+
+  ggplot2::ggplot(df_all, ggplot2::aes(x = probability, fill = true_class)) +
+    ggplot2::geom_density(alpha = 0.5, color = "black", linewidth = 0.3) +
+    ggplot2::geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray40") +
+    ggplot2::facet_wrap(~ model, scales = "free_y") +
+    ggplot2::scale_fill_manual(values = c("#1f77b4", "#d62728")) +
+    ggplot2::labs(
+      title = "Out-of-Fold Predicted Probability Density",
+      subtitle = "Separation between classes indicates discriminative power. Dashed line = 0.5 threshold.",
+      x = "Predicted Probability (Class of Interest)",
+      y = "Density",
+      fill = "True Class"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      legend.position = "bottom",
+      strip.text = ggplot2::element_text(face = "bold", size = 11)
+    )
+}
+
+
+#' Plot SHAP vs Permutation Importance Scatter
+#'
+#' Visualizes the relationship between SHAP importance (credit distribution)
+#' and Permutation Importance (global loss). Features that rank high in both
+#' methods are the most robust biomarkers.
+#'
+#' @param global_importance Data.frame of global SHAP importance.
+#' @param permutation_top Data.frame of top permutation features.
+#' @param feature_frequency Data.frame of feature selection frequency (optional).
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @export
+plotSHAPvsPermutation <- function(global_importance, permutation_top, feature_frequency = NULL) {
+
+  # Agrega a permutação (tirando a média entre os modelos)
+  perm_agg <- permutation_top %>%
+    dplyr::group_by(variable) %>%
+    dplyr::summarize(
+      perm_importance = mean(mean_delta_loss, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  # Pega o SHAP global
+  shap_df <- global_importance %>%
+    dplyr::select(variable, mean_abs_contribution) %>%
+    dplyr::rename(shap_importance = mean_abs_contribution)
+
+  # Junta as duas métricas
+  df_merged <- dplyr::inner_join(shap_df, perm_agg, by = "variable")
+
+  if (nrow(df_merged) == 0) return(ggplot2::ggplot() + ggplot2::theme_void() + ggplot2::labs(title = "No overlapping features for SHAP vs Permutation"))
+
+  # Define as medianas para traçar os quadrantes
+  med_shap <- stats::median(df_merged$shap_importance, na.rm = TRUE)
+  med_perm <- stats::median(df_merged$perm_importance, na.rm = TRUE)
+
+  # Marca quem está no quadrante superior direito (os mais robustos)
+  df_merged <- df_merged %>%
+    dplyr::mutate(
+      is_top_quadrant = (shap_importance > med_shap) & (perm_importance > med_perm),
+      point_color = ifelse(is_top_quadrant, "#d62728", "gray60"),
+      label = ifelse(is_top_quadrant, variable, "") # Só coloca nome nos top
+    )
+
+  p <- ggplot2::ggplot(df_merged, ggplot2::aes(x = perm_importance, y = shap_importance)) +
+    # Linhas dos quadrantes
+    ggplot2::geom_vline(xintercept = med_perm, linetype = "dashed", color = "gray80") +
+    ggplot2::geom_hline(yintercept = med_shap, linetype = "dashed", color = "gray80") +
+    # Pontos fixos (destacando em vermelho os top)
+    ggplot2::geom_point(ggplot2::aes(color = point_color), size = 3, alpha = 0.8) +
+    ggplot2::scale_color_identity() +
+    # Linha de tendência
+    ggplot2::geom_smooth(method = "lm", se = TRUE, color = "gray30", linetype = "dashed", linewidth = 0.5) +
+    ggplot2::labs(
+      title = "SHAP vs Permutation Importance",
+      subtitle = "Highlighting robust biomarkers (Upper-Right Quadrant)",
+      x = "Permutation Importance (Mean Delta Loss)",
+      y = "SHAP Importance (Mean |SHAP|)"
+    ) +
+    ggplot2::theme_minimal(base_size = 12)
+
+  # Aplica o ggrepel se estiver instalado (o que evita sobreposição de textos)
+  if (requireNamespace("ggrepel", quietly = TRUE)) {
+    p <- p + ggrepel::geom_text_repel(
+      ggplot2::aes(label = label),
+      size = 3.5,
+      fontface = "italic",
+      box.padding = 0.5,
+      max.overlaps = Inf,
+      color = "black"
+    )
+  } else {
+    p <- p + ggplot2::geom_text(
+      ggplot2::aes(label = label),
+      size = 3.5,
+      hjust = -0.1,
+      vjust = -0.3,
+      check_overlap = TRUE
+    )
+  }
+
+  return(p)
 }

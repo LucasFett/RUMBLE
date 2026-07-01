@@ -19,6 +19,7 @@ In its current form, the package also includes a reviewer-oriented feature that 
 | Quick start | Minimal reproducible example |
 | Input and output structure | Expected data formats and return object |
 | Interpretability | Global consensus, per-model profiles, and metric-based filtering |
+| Nested CV & Generalization Gap | Inner CV metrics and validation of overfitting |
 | Exported artifacts | Files written to `output_dir` |
 | Reviewer checklist | How to validate the package quickly |
 | Testing and development | Automated testing and package inspection |
@@ -143,7 +144,8 @@ The table below summarizes the most relevant arguments for practical use and rev
 | Element | Content |
 |---|---|
 | `models` | Final fitted models and test-set predictions |
-| `metrics` | Summary table of model performance metrics |
+| `metrics` | Summary table of model performance metrics across outer test folds |
+| `cv_metrics` | Strict, configuration-matched inner loop CV metrics for assessing Generalization Gap |
 | `importance` | Raw SHAP, model-specific SHAP summaries, global consensus, and permutation importance |
 | `plots` | Performance and interpretability plots |
 | `data` | Prepared training and test data |
@@ -241,6 +243,7 @@ When `output_dir` is defined, the package automatically writes plots and tables 
 | Artifact type | Example files |
 |---|---|
 | Global metrics | `*_model_metrics.tsv` |
+| Inner CV metrics | `*_cv_metrics.tsv` |
 | Consensus SHAP | `*_shap_global_spearman.tsv` |
 | Model-specific SHAP | `*_shap_model_spearman.tsv` |
 | Permutation importance | `*_permutation_top.tsv` |
@@ -248,6 +251,14 @@ When `output_dir` is defined, the package automatically writes plots and tables 
 | Model-specific figures | `*_RF_shap_spearman.png`, `*_XGB_shap_beeswarm.png`, and related outputs |
 
 This organization makes the output directory substantially more reviewer-friendly because direct inspection no longer depends on manual extraction from the returned object.
+
+---
+
+## Nested Cross-Validation & Generalization Gap
+
+RUMBLE 3.1.0 enforces strict mathematical alignment in the extraction of metrics from the **Nested Cross-Validation** inner loop. When the hyperparameter tuning step selects the winning configuration (e.g., the one that maximizes MCC), RUMBLE extracts all other metrics (AUC, Accuracy, F1, etc.) exclusively from that exact same configuration (`.config`). 
+
+This prevents "Optimization Reporting Bias" (where one might incorrectly report the maximum AUC from configuration A alongside the maximum MCC from configuration B). The resulting `results$cv_metrics` table provides an accurate estimation of inner-fold performance. Comparing these inner metrics with the outer-fold test metrics (`results$metrics`) allows researchers to rigorously assess the **Generalization Gap** and diagnose potential model overfitting before deriving biomarker interpretations.
 
 ---
 

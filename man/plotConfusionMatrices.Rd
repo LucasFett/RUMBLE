@@ -2,7 +2,7 @@
 % Please edit documentation in R/plot_functions.R
 \name{plotConfusionMatrices}
 \alias{plotConfusionMatrices}
-\title{Plot Confusion Matrices}
+\title{Plot Confusion Matrices (Pooled Out-of-Fold)}
 \usage{
 plotConfusionMatrices(final_models, target_var)
 }
@@ -16,5 +16,5 @@ A \code{ggplot} object.
 }
 \description{
 Displays confusion matrices as heatmaps with absolute counts and
-proportions for each model.
+proportions for each model using pooled Out-of-Fold (OOF) predictions.
 }

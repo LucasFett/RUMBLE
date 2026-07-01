@@ -37,7 +37,7 @@ test_that("RUMBLE pipeline returns consensus and model-specific interpretability
   )
 
   expect_type(results, "list")
-  expect_true(all(c("models", "plots", "importance", "selected_models") %in% names(results)))
+  expect_true(all(c("models", "plots", "importance", "selected_models", "cv_metrics") %in% names(results)))
   expect_true(nrow(results$metrics) > 0)
 
   expect_s3_class(results$plots$roc, "ggplot")
@@ -192,4 +192,53 @@ test_that("RUMBLE runs differential abundance correctly when requested", {
   expect_true(all(c("Taxon", "logFC", "p_val", "adj_p_val") %in% colnames(results_da$da_results)))
 
   expect_s3_class(results_da$plots$biomarker_integrated_spearman, "ggplot")
+})
+
+test_that("RUMBLE correctly extracts inner CV metrics for generalization gap evaluation", {
+  set.seed(321)
+  n_samples <- 100
+  n_taxa <- 20
+
+  otu <- matrix(
+    sample(0:100, n_samples * n_taxa, replace = TRUE),
+    nrow = n_samples,
+    ncol = n_taxa
+  )
+  rownames(otu) <- paste0("Sample", seq_len(n_samples))
+  colnames(otu) <- paste0("Taxa", seq_len(n_taxa))
+
+  meta <- data.frame(
+    ID = rownames(otu),
+    Group = factor(rep(c("Control", "Disease"), each = n_samples / 2))
+  )
+  rownames(meta) <- meta$ID
+
+  results_cv <- RUMBLE(
+    input = otu,
+    metadata = meta,
+    outcome_var = "Group",
+    class_of_interest = "Disease",
+    run_da = FALSE,
+    tax_level = NULL,
+    n_cores = 1,
+    grid_size = 1,
+    cv_folds = 2,
+    shap_reps = 1,
+    top_n = 2,
+    verbose = FALSE,
+    shap_data = "test",
+    shap_model = "consensus",
+    xgb_trees = 5,
+    rf_trees = 5
+  )
+
+  # cv_metrics deve existir
+  expect_false(is.null(results_cv$cv_metrics))
+  expect_true(is.data.frame(results_cv$cv_metrics))
+
+  # Deve conter as colunas esperadas do novo pipeline rigoroso
+  expect_true(all(c("Model", "Fold", "Metric", "CV_Mean", "CV_StdErr") %in% colnames(results_cv$cv_metrics)))
+
+  # A tabela não deve estar vazia
+  expect_true(nrow(results_cv$cv_metrics) > 0)
 })

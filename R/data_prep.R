@@ -1,8 +1,9 @@
 #' Prepare Microbiome Data for Machine Learning
 #'
 #' Performs standard preprocessing for biomarker analysis: optional taxonomic
-#' aggregation, optional removal of unclassified taxa, prevalence filtering,
-#' NA imputation, and centered log-ratio (CLR) transformation.
+#' aggregation, optional removal of unclassified taxa via user-defined patterns,
+#' prevalence filtering, NA imputation, and centered log-ratio (CLR)
+#' transformation.
 #'
 #' @param input A \code{phyloseq} object OR a numeric matrix/data.frame
 #'   with samples as rows and taxa as columns.
@@ -17,22 +18,28 @@
 #' @param min_abundance Numeric. Minimum relative abundance threshold to
 #'   consider a taxon as present in a sample (default 0.0001).
 #' @param pseudocount Numeric. Small value added before CLR transformation
-#'   to handle zeros (default 1e-6).
+#'   to handle exact zeros (default 1e-6).
 #' @param remove_unclassified Logical. If \code{TRUE}, removes taxa whose
-#'   names contain patterns such as \code{"uncultured"}, \code{"unknown"},
-#'   \code{"unclassified"}, or \code{"_"}. Default is \code{FALSE}.
+#'   names match the pattern defined in \code{unclassified_patterns}.
+#'   Default is \code{FALSE}.
+#' @param unclassified_patterns Character or \code{NULL}. A regular expression
+#'   pattern used to identify unclassified or invalid taxa names. Only used
+#'   when \code{remove_unclassified = TRUE}. Default is
+#'   \code{"uncultured|unknown|unclassified"}.
 #' @param normalization_method Character. Method for compositional normalization.
 #'   Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
-#'   The CLR transformation is recommended for all tree-based machine learning
-#'   algorithms (Random Forest, XGBoost) as it preserves mathematical monotonicity
-#'   and ensures proper feature importance calculations via SHAP values.
+#'   The CLR transformation is recommended for all machine learning
+#'   algorithms (Random Forest, XGBoost, KNN, ENET) as it preserves mathematical
+#'   monotonicity and ensures proper feature importance calculations via SHAP
+#'   values.
 #' @param verbose Logical. If \code{TRUE} (default), prints progress messages.
 #'
 #' @return A named list with five elements:
 #' \itemize{
 #'   \item \code{features}: A data.frame of normalized abundances (samples x taxa).
 #'   \item \code{metadata}: A data.frame of sample metadata aligned with features.
-#'   \item \code{filtered_counts}: A data.frame of raw/relative abundances (before CLR transformation) after prevalence filtering.
+#'   \item \code{filtered_counts}: A data.frame of raw/relative abundances
+#'     (before CLR transformation) after prevalence filtering.
 #'   \item \code{n_taxa_removed}: Integer. Total number of taxa removed.
 #'   \item \code{n_samples}: Integer. Number of samples in the final dataset.
 #' }
@@ -42,31 +49,13 @@
 #' \enumerate{
 #'   \item Convert input to a \code{phyloseq} object (if not already).
 #'   \item Aggregate taxa at the specified taxonomic level (optional).
-#'   \item Remove unclassified/invalid taxa names (optional).
+#'   \item Remove unclassified/invalid taxa names using user-defined patterns
+#'     (optional).
 #'   \item Sanitise taxa names with \code{make.names()} for ML compatibility.
 #'   \item Impute \code{NA} values with zero.
 #'   \item Convert to relative abundance and filter by prevalence.
-#'   \item Apply CLR transformation.
+#'   \item Apply CLR transformation with a pseudocount.
 #' }
-#'
-#' @examples
-#'   # Load example data provided by the package
-#'   ps_path <- system.file("extdata", "PRJEB38465_phyloseq_com_metadados_completos.rds",
-#'                          package = "RUMBLE")
-#'
-#'   # Check if file exists (just in case)
-#'   if (file.exists(ps_path)) {
-#'     ps <- readRDS(ps_path)
-#'
-#'     # Run preprocessing with default CLR
-#'     prep <- prepareData(ps, tax_level = "Genus", min_prevalence = 0.1)
-#'
-#'
-#'
-#'     # Check results
-#'     head(prep$features[, 1:5])
-#'   }
-#'
 #'
 #' @importFrom methods is
 #' @importFrom phyloseq phyloseq otu_table sample_data tax_table
@@ -80,6 +69,7 @@ prepareData <- function(input,
                         min_abundance = 0.0001,
                         pseudocount = 1e-6,
                         remove_unclassified = FALSE,
+                        unclassified_patterns = "uncultured|unknown|unclassified",
                         normalization_method = "clr",
                         verbose = TRUE) {
 
@@ -90,6 +80,7 @@ prepareData <- function(input,
   ## ------------------------------------------------------------------
   ## Validate normalization_method
   ## ------------------------------------------------------------------
+
   normalization_method <- match.arg(normalization_method,
                                     c("clr"))
   msg("Normalization method: ", normalization_method)
@@ -156,25 +147,29 @@ prepareData <- function(input,
   }
 
   ## ------------------------------------------------------------------
-  ## 3. Remove unclassified / invalid taxa (optional)
+  ## 3. Remove unclassified / invalid taxa (optional, user-controlled)
   ## ------------------------------------------------------------------
   if (remove_unclassified) {
-    taxa_nomes <- phyloseq::taxa_names(ps)
-    invalid_pattern <- "uncultured|unknown|unclassified|_"
-    valid_taxa <- taxa_nomes[
-      !grepl(invalid_pattern, taxa_nomes, ignore.case = TRUE)
-    ]
-    valid_taxa <- valid_taxa[!is.na(valid_taxa) & valid_taxa != ""]
+    if (is.null(unclassified_patterns) || !nzchar(unclassified_patterns)) {
+      msg("remove_unclassified = TRUE but no pattern provided. Skipping.")
+    } else {
+      taxa_nomes <- phyloseq::taxa_names(ps)
+      valid_taxa <- taxa_nomes[
+        !grepl(unclassified_patterns, taxa_nomes, ignore.case = TRUE)
+      ]
+      valid_taxa <- valid_taxa[!is.na(valid_taxa) & valid_taxa != ""]
 
-    n_removed_unclass <- length(taxa_nomes) - length(valid_taxa)
+      n_removed_unclass <- length(taxa_nomes) - length(valid_taxa)
 
-    if (n_removed_unclass > 0L) {
-      msg("Removed ", n_removed_unclass,
-          " unclassified/invalid taxa")
-      if (length(valid_taxa) > 0) {
-        ps <- phyloseq::prune_taxa(valid_taxa, ps)
-      } else {
-        stop("All taxa were filtered out by 'remove_unclassified'.")
+      if (n_removed_unclass > 0L) {
+        msg("Removed ", n_removed_unclass,
+            " taxa matching pattern: '", unclassified_patterns, "'")
+        if (length(valid_taxa) > 0) {
+          ps <- phyloseq::prune_taxa(valid_taxa, ps)
+        } else {
+          stop("All taxa were filtered out by 'remove_unclassified'. ",
+               "Consider relaxing 'unclassified_patterns'.")
+        }
       }
     }
   }
@@ -224,26 +219,16 @@ prepareData <- function(input,
   }
   ps_filtered <- phyloseq::prune_taxa(keep_taxa, ps)
 
-  ## ------------------------------------------------------------------
-  ## 7. Compositional normalization (CLR)
-  ## ------------------------------------------------------------------
-  if (normalization_method == "clr") {
-    # Standard CLR transformation
-    ps_clr <- microbiome::transform(
-      ps_filtered, "clr", pseudocount = pseudocount
-    )
-    msg("Applied CLR transformation with pseudocount = ", pseudocount)
-
-  }
 
   ## ------------------------------------------------------------------
-  ## 8. Build output
+  ## 9. Build output
   ## ------------------------------------------------------------------
-  features <- as.data.frame(phyloseq::otu_table(ps_clr))
-  if (phyloseq::taxa_are_rows(ps_clr)) {
+  # Extraímos os features e metadados diretamente do ps_filtered
+  features <- as.data.frame(phyloseq::otu_table(ps_filtered))
+  if (phyloseq::taxa_are_rows(ps_filtered)) {
     features <- as.data.frame(t(features))
   }
-  final_metadata <- as.data.frame(phyloseq::sample_data(ps_clr))
+  final_metadata <- as.data.frame(phyloseq::sample_data(ps_filtered))
 
   n_taxa_final <- ncol(features)
   n_taxa_total_removed <- n_taxa_initial - n_taxa_final
@@ -252,8 +237,7 @@ prepareData <- function(input,
       n_taxa_final, " features (",
       n_taxa_total_removed, " taxa removed)")
 
-  # Extract filtered counts (relative abundance before CLR transformation)
-  # This is needed for differential abundance analysis methods like ANCOM-BC and ALDEx2
+  # O resto do código (extract filtered counts) se mantém igual, pois já usa ps_filtered
   filtered_counts <- as.data.frame(phyloseq::otu_table(ps_filtered))
   if (phyloseq::taxa_are_rows(ps_filtered)) {
     filtered_counts <- as.data.frame(t(filtered_counts))

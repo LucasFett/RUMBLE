@@ -2,7 +2,7 @@
 % Please edit documentation in R/run_analysis.R
 \name{RUMBLE}
 \alias{RUMBLE}
-\title{Run the RUMBLE Pipeline}
+\title{Run the Complete RUMBLE Analysis Pipeline}
 \usage{
 RUMBLE(
   input,
@@ -10,10 +10,11 @@ RUMBLE(
   outcome_var,
   class_of_interest,
   tax_level = NULL,
+  correlation_threshold = NULL,
   project_name = "RUMBLE_analysis",
   output_dir = NULL,
   n_cores = 1L,
-  train_prop = 0.7,
+  outer_folds = 5L,
   cv_folds = 5L,
   grid_size = 30L,
   top_n = 20L,
@@ -22,11 +23,12 @@ RUMBLE(
   rf_trees = 500L,
   min_prevalence = 0.05,
   min_abundance = 1e-04,
+  min_fold_frequency = 0.7,
   remove_unclassified = FALSE,
+  unclassified_patterns = "uncultured|unknown|unclassified",
   normalization_method = "clr",
   seed = 42L,
   verbose = TRUE,
-  shap_data,
   shap_method = "exact",
   shap_model = "all",
   metric_cutoffs = NULL,
@@ -49,14 +51,16 @@ the metadata (e.g., \code{"ses"}).}
 disease/condition association analysis (e.g., \code{"CRC"}, \code{"disease"}).
 This parameter is mandatory and must match one of the levels in the
 \code{outcome_var} variable. SHAP values and feature directions will be
-calculated with respect to this class. For example, if
-\code{class_of_interest = "CRC"}, positive SHAP values indicate features
-that increase the probability of CRC, while negative values indicate
-protective features.}
+calculated with respect to this class.}
 
 \item{tax_level}{Character or \code{NULL}. Taxonomic rank for
 aggregation (e.g., \code{"Genus"}). Set to \code{NULL} to skip
 aggregation (default).}
+
+\item{correlation_threshold}{Numeric or \code{NULL}. Threshold for removing
+highly correlated features during preprocessing. Default is \code{NULL}
+(no filtering), which is highly recommended for microbiome data to preserve
+biological consortia/guilds.}
 
 \item{project_name}{Character. A label for the analysis, used in
 output file names (default \code{"RUMBLE_analysis"}).}
@@ -68,45 +72,24 @@ output file names (default \code{"RUMBLE_analysis"}).}
 \item{n_cores}{Integer. Number of CPU cores for parallel
 hyperparameter tuning (default 1).}
 
-\item{train_prop}{Numeric. Proportion of data used for training
-(default 0.7).}
+\item{outer_folds}{Integer. Number of outer cross-validation folds for
+testing (default 5).}
 
 \item{cv_folds}{Integer. Number of cross-validation folds for tuning
 (default 5).}
 
 \item{grid_size}{Integer. Number of hyperparameter combinations to
-evaluate per model during hyperparameter tuning (default 30).
-Higher values increase computation time but provide more stable
-hyperparameter selection. The default value (30) is recommended for
-publication-quality results. For quick exploratory analysis, you may
-reduce this to 10. For Meta-Analysis or Critical Study, consider 50 or higher.}
+evaluate per model during hyperparameter tuning (default 30).}
 
 \item{top_n}{Integer. Number of top features to display in
 interpretability plots (default 20).}
 
 \item{shap_reps}{Integer. Number of repetitions for SHAP and
-permutation importance calculations (default 25).
-Higher values provide more stable feature importance rankings.
-The default value (25) offers an excellent balance between robustness
-and computation time. For critical studies or meta-analyses, consider 100
-or more repetitions.
-\strong{Note:} This parameter significantly affects computation time.}
+permutation importance calculations (default 25).}
 
-\item{xgb_trees}{Integer. Number of trees for the XGBoost model
-(default 1000). XGBoost is sensitive to the number of boosting iterations.
-The default value (1000) is recommended for publication-quality results.
-For quick exploratory analysis, you may reduce this to 500 to speed up
-computation. Beyond 1000, improvements are marginal and risk of overfitting
-increases.
-\strong{Note:} This parameter only affects the XGBoost model, not Random
-Forest, Elastic Net, or KNN models.}
+\item{xgb_trees}{Integer. Number of trees for XGBoost (default 1000).}
 
-\item{rf_trees}{Integer. Number of trees for the Random Forest model
-(default 500). The default value is well-established in the literature
-and appropriate for both exploratory and publication-quality analysis.
-Typically does not need adjustment.
-\strong{Note:} This parameter only affects the Random Forest model, not
-XGBoost, Elastic Net, or KNN models.}
+\item{rf_trees}{Integer. Number of trees for Random Forest (default 500).}
 
 \item{min_prevalence}{Numeric. Minimum prevalence threshold for
 taxa filtering (default 0.05).}
@@ -114,76 +97,66 @@ taxa filtering (default 0.05).}
 \item{min_abundance}{Numeric. Minimum relative abundance to
 consider a taxon present (default 0.0001).}
 
+\item{min_fold_frequency}{Numeric. Minimum fraction of outer folds in which
+a feature must appear in the top-N to be included in the consensus ranking
+(default 0.7, i.e., 70 percent of folds). This filters out unstable
+features that appear sporadically.}
+
 \item{remove_unclassified}{Logical. Whether to remove taxa with
-names matching common unclassified patterns (default
-\code{FALSE}).}
+names matching common unclassified patterns (default \code{FALSE}).}
+
+\item{unclassified_patterns}{Character. Regex pattern for identifying
+unclassified taxa. Only used when \code{remove_unclassified = TRUE}.
+Default: \code{"uncultured|unknown|unclassified"}.}
 
 \item{normalization_method}{Character. Method for compositional normalization.
-Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
-The CLR transformation is recommended for all machine learning
-algorithms (Random Forest, XGBoost, KNN, ENET) as it preserves mathematical monotonicity
-and ensures proper feature importance calculations via SHAP values.}
+Currently only \code{"clr"} is supported (default).}
 
 \item{seed}{Integer. Random seed for reproducibility (default 42).}
 
-\item{verbose}{Logical. Whether to print progress messages (default TRUE).
-#' @param metric_cutoffs Named numeric vector. Optional quality filter for models
-based on performance metrics. Models failing to meet the specified thresholds
-are excluded from the SHAP analysis. Example:
-\code{metric_cutoffs = c("mcc" = 0.8, "roc_auc" = 0.75)}.
-Default is \code{NULL} (no filtering). This parameter ensures that only
-high-quality models contribute to the consensus biomarker ranking.}
-
-\item{shap_data}{Character. Which data to use for SHAP calculation and prevalence plotting.
-This parameter is mandatory and must be explicitly specified by the user.
-Options are \code{"train"} (recommended for biomarker discovery, uses training data),
-\code{"test"} (for prediction-focused analysis), or \code{"all"} (uses entire dataset).
-The choice reflects the analytical objective: use \code{"train"} to map what the model
-learned during training, \code{"test"} for held-out performance evaluation, or
-\code{"all"} for maximum statistical power in exploratory analysis.}
+\item{verbose}{Logical. Whether to print progress messages (default TRUE).}
 
 \item{shap_method}{Character. Method for SHAP calculation. Options are
-\code{"exact"} (default, uses DALEX for rigorous SHAP values) or
-\code{"fast"} (uses fastshap package for faster approximation).
-The exact method is recommended for publication-quality results.
-The fast method provides a good approximation with significantly
-reduced computation time, suitable for exploratory analysis.}
+\code{"exact"} (default) or \code{"fast"}.}
 
 \item{shap_model}{Character vector controlling which model-specific SHAP
-profiles are generated in addition to the consensus plots. Use
-\code{"all"} (default) to generate isolated outputs for every model that
-passes \code{metric_cutoffs}, \code{"consensus"} to skip isolated model
-plots, or provide one or more model names (for example,
-\code{c("RF", "XGB")}).}
+profiles are generated. Use \code{"all"} (default) to generate for every
+model, \code{"consensus"} to skip model-specific plots, or provide
+specific model names (e.g., \code{c("RF", "XGB")}).}
+
+\item{metric_cutoffs}{Named numeric vector. Optional quality filter for
+models based on performance metrics. Default is \code{NULL} (no filtering).}
 
 \item{run_da}{Logical. Whether to run differential abundance analysis
-(default \code{TRUE}). When \code{TRUE}, the integrated biomarker plots
-will include a third panel with differential abundance metrics (Log2FC).}
+(default \code{TRUE}).}
 
 \item{da_method}{Character. Differential abundance method to use.
-Options are \code{"wilcoxon"} (default fallback requiring no Bioconductor dependencies),
-\code{"ancombc"}, or \code{"aldex2"}. Only used if \code{run_da = TRUE}.}
+Options are \code{"wilcoxon"} (default), \code{"ancombc"}, or
+\code{"aldex2"}.}
 }
 \value{
-A named list with seven elements:
+A named list with the following elements:
 \itemize{
 \item \code{models}: Named list of fitted model objects and predictions.
 \item \code{metrics}: Data.frame summarising performance metrics.
 \item \code{importance}: List containing SHAP and permutation results.
-\item \code{plots}: List of ggplot objects, including consensus and
-optional model-specific SHAP plots.
-\item \code{data}: List with train and test data.frames.
+\item \code{plots}: List of ggplot objects.
 \item \code{selected_models}: Character vector of models used for
 interpretability after applying \code{metric_cutoffs}.
-\item \code{da_results}: Data.frame with differential abundance results
-(if \code{run_da = TRUE}), or \code{NULL} otherwise.
+\item \code{da_results}: Data.frame with differential abundance results.
+\item \code{shap_overfitting}: Train vs test SHAP stability metrics.
+\item \code{model_consistency}: Inter-model agreement metrics.
+\item \code{shap_consistency}: Inter-fold SHAP stability metrics.
+\item \code{feature_frequency}: Feature selection frequency across folds.
+\item \code{hyperparameter_stability}: Hyperparameter variance summary.
 }
 }
 \description{
 Executes the complete RUMBLE analysis pipeline with publication-quality
 settings. This function performs data preparation, model training with
-hyperparameter tuning, evaluation on a held-out test set, and model-agnostic
-interpretability via SHAP values and permutation importance.
+hyperparameter tuning via nested cross-validation, evaluation on held-out
+test folds, and model-agnostic interpretability via SHAP values and
+permutation importance.
 }
 \details{
 \strong{Default Parameters:} The default values are configured for
@@ -194,7 +167,6 @@ All results, including plots and tables, are returned in a structured list
 and optionally saved to disk.
 }
 \examples{
-  # Load example data provided by the package
   ps_path <- system.file("extdata",
                          "PRJEB38465_phyloseq_com_metadados_completos.rds",
                          package = "RUMBLE")
@@ -202,8 +174,6 @@ and optionally saved to disk.
   if (file.exists(ps_path)) {
     ps <- readRDS(ps_path)
 
-    # EXAMPLE 1: Run pipeline with minimal parameters for demonstration speed
-    # In real analysis, use defaults
     results <- RUMBLE(
       input = ps,
       outcome_var = "ses",
@@ -211,41 +181,17 @@ and optionally saved to disk.
       tax_level = "Genus",
       project_name = "Demo_Analysis",
       output_dir = tempdir(),
-      cv_folds = 2,    # Reduced for example speed
-      grid_size = 2,   # Reduced for example speed
-      shap_reps = 1,   # Reduced for example speed
+      cv_folds = 2,
+      grid_size = 2,
+      shap_reps = 1,
       n_cores = 1,
       verbose = FALSE,
-      shap_data = "train",
+      outer_folds = 3,
       xgb_trees = 5,
       rf_trees = 5
     )
 
-    # Inspect results
     print(results$metrics)
-    print(results$plots$roc)
   }
-    # EXAMPLE 2: Publication-quality analysis (default parameters)
-    # Default parameters are configured for robust, publication-ready results
-    results_publication <- RUMBLE(
-      input = ps,
-      outcome_var = "ses",
-      class_of_interest = "Low",
-      tax_level = "Genus",
-      project_name = "Publication_Analysis",
-      output_dir = tempdir(),
-      # Using default parameters:
-      # grid_size = 30 (robust hyperparameter tuning)
-      # shap_reps = 100 (stable feature importance)
-      # xgb_trees = 1000 (optimal XGBoost performance)
-      n_cores = 1,
-      shap_data = "train",
-      verbose = TRUE
-    )
-
-    # Inspect results
-    print(results_publication$metrics)
-    print(results_publication$plots$roc)
-
 
 }

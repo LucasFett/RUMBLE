@@ -1,4 +1,4 @@
-#' Internal Machine Learning Functions
+#' Internal Machine Learning Functions for RUMBLE
 #'
 #' These functions handle data splitting, recipe building, workflow
 #' construction, hyperparameter tuning, and model evaluation. They are
@@ -10,7 +10,7 @@
 #'
 #' @importFrom recipes recipe step_zv step_normalize step_corr
 #'      all_predictors
-#' @importFrom themis step_downsample
+# REMOVIDO: themis::step_downsample (usando Case Weights para balanceamento)
 #' @importFrom parsnip rand_forest boost_tree logistic_reg
 #'      nearest_neighbor set_engine set_mode fit
 #' @importFrom workflows workflow add_model add_recipe
@@ -31,50 +31,74 @@ NULL
 
 
 ## ------------------------------------------------------------------
-## Split data into training and test sets
+## Create Outer Cross-Validation Folds
 ## ------------------------------------------------------------------
 #' @noRd
-.splitData <- function(data, target_var, prop = 0.7, seed = 42L) {
+.createOuterFolds <- function(data, target_var, folds = 5L, seed = 42L) {
   if (!is.factor(data[[target_var]])) {
     data[[target_var]] <- as.factor(data[[target_var]])
   }
 
   withr::with_seed(seed, {
-    split_obj <- rsample::initial_split(
-      data, prop = prop,
+    folds_obj <- rsample::vfold_cv(
+      data, v = folds,
       strata = !!rlang::sym(target_var)
     )
   })
 
-  list(
-    split = split_obj,
-    train = rsample::training(split_obj),
-    test  = rsample::testing(split_obj)
-  )
+  folds_obj
 }
-
 
 ## ------------------------------------------------------------------
 ## Build preprocessing recipe
 ## ------------------------------------------------------------------
+#' Build a preprocessing recipe for the ML pipeline.
+#'
+#' The recipe applies:
+#' 1. Zero-variance filter (step_zv) to remove constant features.
+#' 2. Centering and scaling (step_normalize) for KNN and ENET compatibility.
+#'    Note: CLR-transformed data is already on a log-ratio scale, but
+#'    step_normalize ensures all features have unit variance, which is
+#'    critical for distance-based (KNN) and regularized (ENET) models.
+#'    For tree-based models (RF, XGB), normalization is mathematically
+#'    irrelevant but does not harm performance.
+#' 3. Optional correlation filter (step_corr) if threshold is provided.
+#'
+#' \strong{Note on Class Imbalance:} Class imbalance is now handled via
+#' cost-sensitive learning (case weights) rather than downsampling. This
+#' preserves 100% of the original data, which is critical for small cohorts
+#' (N < 200) where discarding samples destroys variance structure and reduces
+#' statistical power.
+#'
 #' @noRd
 .buildRecipe <- function(train_data, target_var,
-                         balance_classes = FALSE, seed = 42L) {
+                         balance_classes = TRUE, seed = 42L,
+                         correlation_threshold = NULL) {
+
   rec <- recipes::recipe(
     stats::as.formula(paste(target_var, "~ .")),
     data = train_data
-  ) %>%
-    recipes::step_zv(recipes::all_predictors()) %>%
-    recipes::step_normalize(recipes::all_predictors()) %>%
-    recipes::step_corr(recipes::all_predictors(), threshold = 0.9)
+  )
 
+  # Não precisamos mais do update_role para case_weight
+
+  rec <- rec %>%
+    recipes::step_zv(recipes::all_predictors()) %>%
+    recipes::step_normalize(recipes::all_predictors())
+
+  # Aplicando o Downsampling logo após a normalização
   if (balance_classes) {
     rec <- rec %>%
       themis::step_downsample(!!rlang::sym(target_var), seed = seed)
   }
-  rec
-}
 
+  if (!is.null(correlation_threshold)) {
+    rec <- rec %>%
+      recipes::step_corr(recipes::all_predictors(), threshold = correlation_threshold)
+  }
+
+  return(rec)
+}
 
 ## ------------------------------------------------------------------
 ## Define model workflows
@@ -148,7 +172,6 @@ NULL
   if (n_cores > 1L) {
     cl <- parallel::makeCluster(n_cores)
     doParallel::registerDoParallel(cl)
-    # Ensure cluster stops even if code crashes
     on.exit(parallel::stopCluster(cl), add = TRUE)
     message("Parallel tuning active: ", n_cores, " cores")
   }
@@ -156,7 +179,6 @@ NULL
   purrr::imap(workflows, function(wf, name) {
     message("  Tuning model: ", name)
 
-    # Catch errors during tuning to prevent pipeline crash
     tryCatch({
       res <- tune::tune_grid(
         wf,
@@ -170,15 +192,14 @@ NULL
         )
       )
 
-      best_param <- tune::select_best(res, metric = "f_meas")
+      best_param <- tune::select_best(res, metric = "mcc")
 
-      # If tuning fails to find a 'best', fallback
       if (is.null(best_param) || nrow(best_param) == 0) {
         warning("Could not select best parameters for ", name)
         return(NULL)
       }
 
-      final_wf   <- tune::finalize_workflow(wf, best_param)
+      final_wf <- tune::finalize_workflow(wf, best_param)
 
       list(
         tuning_results = res,
@@ -225,6 +246,7 @@ NULL
                               data = train_data)
 
     preds <- dplyr::bind_cols(
+      sample_id = rownames(test_data), # <-- Nova linha garantindo o ID da amostra
       stats::predict(fitted_wf, test_data, type = "prob"),
       stats::predict(fitted_wf, test_data, type = "class"),
       test_data[, target_var, drop = FALSE]

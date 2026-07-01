@@ -2,7 +2,7 @@
 % Please edit documentation in R/ml_functions.R
 \name{ml-internal}
 \alias{ml-internal}
-\title{Internal Machine Learning Functions}
+\title{Internal Machine Learning Functions for RUMBLE}
 \value{
 No return value. This object is internal and serves only for organization.
 }
