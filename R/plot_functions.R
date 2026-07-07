@@ -836,41 +836,6 @@ plotBiomarkerIntegrated <- function(filtered_counts,
 }
 
 
-#' Plot Permutation Importance Heatmap
-#'
-#' Displays a heatmap of permutation-based variable importance for each
-#' feature across models.
-#'
-#' @param permutation_top A data.frame of top permutation features.
-#'
-#' @return A \code{ggplot} object.
-#'
-#' @export
-plotPermutationHeatmap <- function(permutation_top) {
-  df_plot <- permutation_top[permutation_top$mean_delta_loss > 0, ]
-
-  ggplot2::ggplot(
-    df_plot,
-    ggplot2::aes(
-      y = reorder(variable, mean_delta_loss),
-      x = model, fill = mean_delta_loss
-    )
-  ) +
-    ggplot2::geom_tile(color = "white", linewidth = 0.5) +
-    ggplot2::labs(
-      y = "Feature", x = "Model",
-      fill = "Importance\n(delta loss)",
-      title = "Permutation Importance Heatmap (Delta Loss)"
-    ) +
-    viridis::scale_fill_viridis(option = "H") +
-    ggplot2::theme_minimal(base_size = 10) +
-    ggplot2::theme(
-      axis.text.x = ggplot2::element_text(
-        angle = 45, hjust = 1
-      )
-    )
-}
-
 
 #' Summarise Model Metrics
 #'
@@ -982,96 +947,6 @@ getIntegratedBiomarkerTable <- function(filtered_counts,
   return(df_integrated)
 }
 
-#' Plot Explainability Stability (Train vs Test SHAP Correlation)
-#'
-#' Creates a grouped bar chart displaying the Spearman and Kendall correlations
-#' between the feature importance rankings of the training and test sets.
-#'
-#' @param shap_overfitting A data.frame containing the stability metrics
-#'   (output of evaluateExplainabilityOverfitting).
-#'
-#' @return A \code{ggplot} object.
-#'
-#' @export
-plotShapStability <- function(shap_overfitting) {
-
-  # Transforma os dados para o formato longo exigido pelo ggplot2
-  df_long <- shap_overfitting %>%
-    tidyr::pivot_longer(
-      cols = c("spearman_train_test", "kendall_train_test"),
-      names_to = "Metric",
-      values_to = "Correlation"
-    ) %>%
-    dplyr::mutate(
-      Metric = ifelse(Metric == "spearman_train_test", "Spearman", "Kendall")
-    )
-
-  # Remove NAs caso algum modelo tenha falhado na correlação
-  df_long <- df_long[!is.na(df_long$Correlation), ]
-
-  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = Correlation, y = stats::reorder(model, Correlation), fill = Metric)) +
-    ggplot2::geom_bar(stat = "identity", position = ggplot2::position_dodge(width = 0.8), width = 0.7) +
-    ggplot2::geom_vline(xintercept = 0.7, linetype = "dashed", color = "red", alpha = 0.6, linewidth = 1) +
-    ggsci::scale_fill_nejm() +
-    ggplot2::labs(
-      title = "Explainability Stability (Train vs Test)",
-      subtitle = "SHAP ranking correlation. Higher values indicate better generalization.\nRed line indicates a 0.70 stability threshold.",
-      x = "Correlation Coefficient",
-      y = "Model",
-      fill = "Metric"
-    ) +
-    ggplot2::theme_minimal(base_size = 12) +
-    ggplot2::coord_cartesian(xlim = c(0, 1)) +
-    ggplot2::theme(
-      legend.position = "bottom",
-      panel.grid.minor = ggplot2::element_blank()
-    )
-
-  return(p)
-}
-#' Plot Inter-Model Consistency Matrix
-#'
-#' Generates a tile plot (heatmap) showing the Spearman correlation between
-#' the feature importance signatures of different models.
-#'
-#' @param consistency_df Output from evaluateInterModelConsistency.
-#'
-#' @return A \code{ggplot} object or NULL if not enough models.
-#' @export
-plotInterModelConsistency <- function(consistency_df) {
-  if (is.null(consistency_df) || nrow(consistency_df) == 0) return(NULL)
-
-  # Cria uma matriz simétrica espelhando os pares
-  mirror <- consistency_df %>%
-    dplyr::rename(Model_A = Model_B, Model_B = Model_A)
-
-  self <- data.frame(
-    Model_A = unique(c(consistency_df$Model_A, consistency_df$Model_B)),
-    Model_B = unique(c(consistency_df$Model_A, consistency_df$Model_B)),
-    Jaccard = 1.0,
-    Spearman = 1.0
-  )
-
-  df_plot <- dplyr::bind_rows(consistency_df, mirror, self)
-
-  p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = Model_A, y = Model_B, fill = Spearman)) +
-    ggplot2::geom_tile(color = "white", linewidth = 1) +
-    ggplot2::geom_text(ggplot2::aes(label = round(Spearman, 2)), color = "black", size = 5) +
-    ggplot2::scale_fill_gradient2(low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0, limit = c(-1, 1)) +
-    ggplot2::labs(
-      title = "Inter-Model Signature Consistency",
-      subtitle = "Spearman correlation of global SHAP rankings",
-      x = NULL, y = NULL, fill = "Spearman\nRho"
-    ) +
-    ggplot2::theme_minimal(base_size = 14) +
-    ggplot2::theme(
-      panel.grid = ggplot2::element_blank(),
-      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)
-    ) +
-    ggplot2::coord_fixed()
-
-  return(p)
-}
 
 
 #' Plot Out-of-Fold Predicted Probability Density

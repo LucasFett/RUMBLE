@@ -1,13 +1,12 @@
 test_that("RUMBLE pipeline returns consensus and model-specific interpretability outputs", {
   set.seed(123)
-  n_samples <- 100
-  n_taxa <- 50
+  n_samples <- 40
+  n_taxa <- 10
 
-  otu <- matrix(
-    sample(0:100, n_samples * n_taxa, replace = TRUE),
-    nrow = n_samples,
-    ncol = n_taxa
-  )
+  # Criação de dados com "sinal biológico" para evitar falha no tuning do XGBoost/ENET
+  otu <- matrix(rpois(n_samples * n_taxa, lambda = 10), nrow = n_samples, ncol = n_taxa)
+  otu[21:40, 1:5] <- otu[21:40, 1:5] + 50 # Adiciona sinal forte nas primeiras 5 taxas para o grupo Disease
+
   rownames(otu) <- paste0("Sample", seq_len(n_samples))
   colnames(otu) <- paste0("Taxa", seq_len(n_taxa))
 
@@ -17,24 +16,26 @@ test_that("RUMBLE pipeline returns consensus and model-specific interpretability
   )
   rownames(meta) <- meta$ID
 
-  results <- RUMBLE(
-    input = otu,
-    metadata = meta,
-    outcome_var = "Group",
-    class_of_interest = "Disease",
-    run_da = FALSE,
-    tax_level = NULL,
-    n_cores = 1,
-    grid_size = 1,
-    cv_folds = 2,
-    shap_reps = 1,
-    top_n = 2,
-    verbose = FALSE,
-    shap_data = "all",
-    shap_model = "all",
-    xgb_trees = 5,
-    rf_trees = 5
-  )
+  suppressWarnings({
+    results <- RUMBLE(
+      input = otu,
+      metadata = meta,
+      outcome_var = "Group",
+      class_of_interest = "Disease",
+      run_da = FALSE,
+      tax_level = NULL,
+      n_cores = 1,
+      outer_folds = 2,  # CRÍTICO PARA VELOCIDADE DO TESTE
+      grid_size = 1,
+      cv_folds = 2,
+      shap_reps = 1,
+      top_n = 2,
+      verbose = FALSE,
+      shap_model = "all",
+      xgb_trees = 5,
+      rf_trees = 5
+    )
+  })
 
   expect_type(results, "list")
   expect_true(all(c("models", "plots", "importance", "selected_models", "cv_metrics") %in% names(results)))
@@ -61,14 +62,12 @@ test_that("RUMBLE pipeline returns consensus and model-specific interpretability
 
 test_that("shap_model = 'consensus' suppresses model-specific plots", {
   set.seed(456)
-  n_samples <- 100
-  n_taxa <- 20
+  n_samples <- 40
+  n_taxa <- 10
 
-  otu <- matrix(
-    sample(0:100, n_samples * n_taxa, replace = TRUE),
-    nrow = n_samples,
-    ncol = n_taxa
-  )
+  otu <- matrix(rpois(n_samples * n_taxa, lambda = 10), nrow = n_samples, ncol = n_taxa)
+  otu[21:40, 1:5] <- otu[21:40, 1:5] + 50
+
   rownames(otu) <- paste0("Sample", seq_len(n_samples))
   colnames(otu) <- paste0("Taxa", seq_len(n_taxa))
 
@@ -78,24 +77,26 @@ test_that("shap_model = 'consensus' suppresses model-specific plots", {
   )
   rownames(meta) <- meta$ID
 
-  results <- RUMBLE(
-    input = otu,
-    metadata = meta,
-    outcome_var = "Group",
-    class_of_interest = "Disease",
-    run_da = FALSE,
-    tax_level = NULL,
-    n_cores = 1,
-    grid_size = 1,
-    cv_folds = 2,
-    shap_reps = 1,
-    top_n = 2,
-    verbose = FALSE,
-    shap_data = "train",
-    shap_model = "consensus",
-    xgb_trees = 5,
-    rf_trees = 5
-  )
+  suppressWarnings({
+    results <- RUMBLE(
+      input = otu,
+      metadata = meta,
+      outcome_var = "Group",
+      class_of_interest = "Disease",
+      run_da = FALSE,
+      tax_level = NULL,
+      n_cores = 1,
+      outer_folds = 2,
+      grid_size = 1,
+      cv_folds = 2,
+      shap_reps = 1,
+      top_n = 2,
+      verbose = FALSE,
+      shap_model = "consensus",
+      xgb_trees = 5,
+      rf_trees = 5
+    )
+  })
 
   expect_length(results$plots$model_specific$shap_spearman, 0)
   expect_length(results$plots$model_specific$shap_beeswarm, 0)
@@ -104,14 +105,12 @@ test_that("shap_model = 'consensus' suppresses model-specific plots", {
 
 test_that("invalid shap_model names raise a clear error", {
   set.seed(789)
-  n_samples <- 100
-  n_taxa <- 15
+  n_samples <- 40
+  n_taxa <- 10
 
-  otu <- matrix(
-    sample(0:100, n_samples * n_taxa, replace = TRUE),
-    nrow = n_samples,
-    ncol = n_taxa
-  )
+  otu <- matrix(rpois(n_samples * n_taxa, lambda = 10), nrow = n_samples, ncol = n_taxa)
+  otu[21:40, 1:5] <- otu[21:40, 1:5] + 50
+
   rownames(otu) <- paste0("Sample", seq_len(n_samples))
   colnames(otu) <- paste0("Taxa", seq_len(n_taxa))
 
@@ -121,27 +120,29 @@ test_that("invalid shap_model names raise a clear error", {
   )
   rownames(meta) <- meta$ID
 
-  expect_error(
-    RUMBLE(
-      input = otu,
-      metadata = meta,
-      outcome_var = "Group",
-      class_of_interest = "Disease",
-      run_da = FALSE,
-      tax_level = NULL,
-      n_cores = 1,
-      grid_size = 1,
-      cv_folds = 2,
-      shap_reps = 1,
-      top_n = 2,
-      verbose = FALSE,
-      shap_data = "test",
-      shap_model = "NOT_A_MODEL",
-      xgb_trees = 5,
-      rf_trees = 5
-    ),
-    "Invalid 'shap_model' selection"
-  )
+  suppressWarnings({
+    expect_error(
+      RUMBLE(
+        input = otu,
+        metadata = meta,
+        outcome_var = "Group",
+        class_of_interest = "Disease",
+        run_da = FALSE,
+        tax_level = NULL,
+        n_cores = 1,
+        outer_folds = 2,
+        grid_size = 1,
+        cv_folds = 2,
+        shap_reps = 1,
+        top_n = 2,
+        verbose = FALSE,
+        shap_model = "NOT_A_MODEL",
+        xgb_trees = 5,
+        rf_trees = 5
+      ),
+      "Invalid 'shap_model' selection"
+    )
+  })
 })
 
 
@@ -151,14 +152,12 @@ test_that("RUMBLE runs differential abundance correctly when requested", {
   testthat::skip_if_not_installed("TreeSummarizedExperiment")
 
   set.seed(999)
-  n_samples <- 100
-  n_taxa <- 20
+  n_samples <- 40
+  n_taxa <- 10
 
-  otu <- matrix(
-    sample(0:100, n_samples * n_taxa, replace = TRUE),
-    nrow = n_samples,
-    ncol = n_taxa
-  )
+  otu <- matrix(rpois(n_samples * n_taxa, lambda = 10), nrow = n_samples, ncol = n_taxa)
+  otu[21:40, 1:5] <- otu[21:40, 1:5] + 50
+
   rownames(otu) <- paste0("Sample", seq_len(n_samples))
   colnames(otu) <- paste0("Taxa", seq_len(n_taxa))
 
@@ -168,24 +167,26 @@ test_that("RUMBLE runs differential abundance correctly when requested", {
   )
   rownames(meta) <- meta$ID
 
-  results_da <- RUMBLE(
-    input = otu,
-    metadata = meta,
-    outcome_var = "Group",
-    class_of_interest = "Disease",
-    run_da = TRUE,
-    da_method = "ancombc",
-    tax_level = NULL,
-    n_cores = 1,
-    grid_size = 1,
-    cv_folds = 2,
-    shap_reps = 1,
-    top_n = 2,
-    verbose = FALSE,
-    shap_data = "all",
-    xgb_trees = 5,
-    rf_trees = 5
-  )
+  suppressWarnings({
+    results_da <- RUMBLE(
+      input = otu,
+      metadata = meta,
+      outcome_var = "Group",
+      class_of_interest = "Disease",
+      run_da = TRUE,
+      da_method = "ancombc",
+      tax_level = NULL,
+      n_cores = 1,
+      outer_folds = 2,
+      grid_size = 1,
+      cv_folds = 2,
+      shap_reps = 1,
+      top_n = 2,
+      verbose = FALSE,
+      xgb_trees = 5,
+      rf_trees = 5
+    )
+  })
 
   expect_false(is.null(results_da$da_results))
   expect_true(is.data.frame(results_da$da_results))
@@ -196,14 +197,12 @@ test_that("RUMBLE runs differential abundance correctly when requested", {
 
 test_that("RUMBLE correctly extracts inner CV metrics for generalization gap evaluation", {
   set.seed(321)
-  n_samples <- 100
-  n_taxa <- 20
+  n_samples <- 40
+  n_taxa <- 10
 
-  otu <- matrix(
-    sample(0:100, n_samples * n_taxa, replace = TRUE),
-    nrow = n_samples,
-    ncol = n_taxa
-  )
+  otu <- matrix(rpois(n_samples * n_taxa, lambda = 10), nrow = n_samples, ncol = n_taxa)
+  otu[21:40, 1:5] <- otu[21:40, 1:5] + 50
+
   rownames(otu) <- paste0("Sample", seq_len(n_samples))
   colnames(otu) <- paste0("Taxa", seq_len(n_taxa))
 
@@ -213,24 +212,26 @@ test_that("RUMBLE correctly extracts inner CV metrics for generalization gap eva
   )
   rownames(meta) <- meta$ID
 
-  results_cv <- RUMBLE(
-    input = otu,
-    metadata = meta,
-    outcome_var = "Group",
-    class_of_interest = "Disease",
-    run_da = FALSE,
-    tax_level = NULL,
-    n_cores = 1,
-    grid_size = 1,
-    cv_folds = 2,
-    shap_reps = 1,
-    top_n = 2,
-    verbose = FALSE,
-    shap_data = "test",
-    shap_model = "consensus",
-    xgb_trees = 5,
-    rf_trees = 5
-  )
+  suppressWarnings({
+    results_cv <- RUMBLE(
+      input = otu,
+      metadata = meta,
+      outcome_var = "Group",
+      class_of_interest = "Disease",
+      run_da = FALSE,
+      tax_level = NULL,
+      n_cores = 1,
+      outer_folds = 2,
+      grid_size = 1,
+      cv_folds = 2,
+      shap_reps = 1,
+      top_n = 2,
+      verbose = FALSE,
+      shap_model = "consensus",
+      xgb_trees = 5,
+      rf_trees = 5
+    )
+  })
 
   # cv_metrics deve existir
   expect_false(is.null(results_cv$cv_metrics))

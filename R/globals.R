@@ -1,3 +1,6 @@
+#' @importFrom stats sd
+NULL
+
 # Declare global variables to prevent R CMD check notes when using tidyverse NSE (Non-Standard Evaluation)
 utils::globalVariables(c(
   # yardstick / tidymodels
@@ -37,5 +40,17 @@ utils::globalVariables(c(
   "fpr", "tpr_mean", "tpr_min", "tpr_max", "mean_auc",
 
   # feature frequency
-  "sd_abs_contribution"
+  "sd_abs_contribution",
+
+  # --- Adições da Auditoria Final (Variáveis Auxiliares e Métricas) ---
+  ".config", "Accuracy_Rate", "Best_CV_Mean", "Discrepancy_Max_Min",
+  "Formatted_Value", "Generalization_Gap", "Is_Correct", "Kendall",
+  "Magnitude Change (%)", "Magnitude_Change_Pct", "Mean_Inner", "Mean_Outer",
+  "Mean_SHAP_Test", "Mean_SHAP_Train", "Model", "Models_Failed",
+  "Prob_True_Class", "SD_Inner", "Spearman", "Spearman (Top N)",
+  "True_Class", "abs_contribution", "feature_val_scaled", "fold",
+  "importance", "is_top_quadrant", "mean_abs_shap_test", "mean_abs_shap_train",
+  "mean_estimate", "mean_tpr", "model_freq", "model_n_folds", "point_color",
+  "sample_id", "scaled_abs_contribution", "sd_auc", "sd_estimate", "sd_tpr",
+  "std_err", "tpr", "ymax", "ymin"
 ))

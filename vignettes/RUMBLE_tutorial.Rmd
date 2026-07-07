@@ -31,9 +31,9 @@ knitr::opts_chunk$set(
 
 The **RUMBLE** (Robust Unified Microbiome Biomarker Learning Engine) package provides a streamlined workflow for identifying robust microbial biomarkers from high-throughput sequencing data using a consensus machine learning strategy.
 
-Version 1.1.0 integrates classical Differential Abundance (DA) analysis alongside model-agnostic interpretability (SHAP). This allows researchers to validate complex predictive patterns with rigorous False Discovery Rate (FDR) control using methods such as ALDEx2, ANCOM-BC, or Wilcoxon.
+The latest version integrates classical Differential Abundance (DA) analysis alongside model-agnostic interpretability through SHAP values. This enables researchers to validate complex predictive patterns using rigorous False Discovery Rate (FDR) control with methods such as **ALDEx2**, **ANCOM-BC**, or **Wilcoxon**.
 
-This vignette demonstrates a simplified exploratory workflow using the example phyloseq object distributed with the package.
+This vignette demonstrates a simplified exploratory workflow using the example **phyloseq** object distributed with the package.
 
 # Load Example Data
 
@@ -58,7 +58,7 @@ print(ps)
 
 # Run a Fast Exploratory Analysis
 
-To keep the vignette lightweight, we reduce `grid_size` and `shap_reps`. In real analyses, prefer default values (`grid_size = 30`, `shap_reps = 25`).
+To keep the vignette lightweight and compilation fast, we reduce the number of folds, grid size, and SHAP repetitions. For production analyses, the default parameters are recommended (`outer_folds = 5`, `cv_folds = 5`, `grid_size = 30`, and `shap_reps = 25`).
 
 ```{r run_pipeline}
 set.seed(42)
@@ -69,13 +69,14 @@ results_fast <- RUMBLE(
   class_of_interest = "Low",
   tax_level         = "Genus",
   project_name      = "Fast_Exploration",
-  output_dir        = "test",
+  output_dir        = tempdir(),   # Temporary directory for vignette compilation
+  n_cores           = 1,
+  outer_folds       = 2,
+  cv_folds          = 2,
   grid_size         = 10,
   shap_reps         = 2,
   xgb_trees         = 100,
   rf_trees          = 100,
-  n_cores           = 1,
-  shap_data         = "test",
   run_da            = TRUE,
   da_method         = "wilcoxon"
 )
@@ -91,17 +92,17 @@ knitr::kable(
 )
 ```
 
-# Nested Cross-Validation & Generalization Gap
+# Nested Cross-Validation and Generalization Gap
 
-RUMBLE 3.1.0 ensures strict extraction of validation metrics from the exact hyperparameter configuration that won the inner CV loop. This allows for an accurate estimation of inner-fold performance.
+RUMBLE extracts validation metrics from the exact hyperparameter configuration selected during the inner cross-validation loop. This provides an unbiased estimate of model performance during tuning.
 
-You can inspect the `cv_metrics` table to see the performance during hyperparameter tuning:
+The `cv_metrics` table summarizes the validation performance obtained throughout hyperparameter optimization.
 
 ```{r cv_metrics}
 head(results_fast$cv_metrics)
 ```
 
-By comparing these inner metrics with the outer-fold test metrics (`results_fast$metrics`), you can rigorously assess the Generalization Gap and diagnose potential model overfitting.
+Comparing these values with the outer-fold test metrics (`results_fast$metrics`) allows users to quantify the **Generalization Gap**, providing an objective assessment of model overfitting.
 
 # Global Results
 
@@ -119,7 +120,7 @@ print(results_fast$plots$roc)
 
 ## Confusion Matrices
 
-```{r cm_plot}
+```{r confusion_plot}
 print(results_fast$plots$cm)
 ```
 
@@ -131,57 +132,51 @@ print(results_fast$plots$shap_spearman)
 
 ## Global SHAP Beeswarm
 
-```{r shap_beeswarm}
+```{r beeswarm}
 print(results_fast$plots$shap_beeswarm)
 ```
 
 ## Taxa Prevalence
 
-```{r shap_prevalence}
+```{r prevalence}
 print(results_fast$plots$shap_prevalence)
 ```
 
 ## Integrated Biomarker Interpretation (Spearman)
 
-```{r biomarker_integrated, fig.height=9, fig.width=12, fig.cap="Combined view of SHAP importance (Spearman) and group prevalence."}
+```{r integrated_plot,
+fig.width=12,
+fig.height=9,
+fig.cap="Integrated biomarker interpretation combining SHAP importance, prevalence, and differential abundance statistics."}
 print(results_fast$plots$biomarker_integrated_spearman)
 ```
 
 # Exporting Data for Custom Analysis
 
-The RUMBLE pipeline automatically generates an integrated data frame that mirrors the biomarker dashboard.
+RUMBLE automatically generates an integrated data frame that mirrors the information displayed in the integrated biomarker dashboard.
 
 ```{r integrated_table}
 integrated_df <- results_fast$integrated_table
 head(integrated_df)
 ```
 
-The table includes:
+The exported table includes:
 
-- **Taxon**: Feature name  
-- **SHAP_Score**: Mean absolute SHAP value  
-- **Direction_Class**: Associated class  
-- **Prevalence_***: Presence across groups  
-- **logFC, p_val, adj_p_val**: Differential abundance statistics  
+- **Taxon:** Feature name.
+- **SHAP_Score:** Mean absolute SHAP value.
+- **Direction_Class:** Predicted class associated with the feature.
+- **Prevalence_*:** Taxon prevalence within each study group.
+- **logFC**, **p_val**, and **adj_p_val:** Differential abundance statistics.
 
-Additionally, two `.tsv` files are generated in `output_dir`:
-
-- `[project]_integrated_biomarkers.tsv`  
-- `[project]_top_differential_abundance.tsv`  
-
-# Permutation Importance
-
-```{r perm_heat}
-print(results_fast$plots$perm_heat)
-```
+In addition, RUMBLE exports tabular reports containing the Generalization Gap, Rank Stability analysis, and Differential Abundance results to the specified `output_dir`.
 
 # Global Importance Tables
 
-```{r importance_table}
+```{r global_importance}
 knitr::kable(
-  head(results_fast$importance$global_importance$spearman, 10),
+  head(results_fast$importance$global_importance_test$spearman, 10),
   digits = 4,
-  caption = "Top 10 biomarkers by SHAP consensus (Spearman direction)."
+  caption = "Top 10 biomarkers ranked by the global SHAP consensus (Spearman direction) evaluated on held-out test data."
 )
 ```
 
@@ -189,11 +184,11 @@ knitr::kable(
 
 ## SHAP Beeswarm per Model
 
-```{r model_beeswarm}
+```{r model_beeswarms}
 model_names <- names(results_fast$plots$model_specific$shap_beeswarm)
 
 for (model_name in model_names) {
-  cat("### ", model_name, " beeswarm\n\n", sep = "")
+  cat("### ", model_name, "\n\n", sep = "")
   print(results_fast$plots$model_specific$shap_beeswarm[[model_name]])
   cat("\n")
 }
@@ -201,12 +196,19 @@ for (model_name in model_names) {
 
 ## Integrated Biomarker Interpretation per Model
 
-```{r model_integrated, fig.height=9, fig.width=12}
+```{r model_integrated,
+fig.width=12,
+fig.height=9}
 model_names <- names(results_fast$plots$model_specific$biomarker_integrated_spearman)
 
 for (model_name in model_names) {
-  cat("### ", model_name, " integrated biomarker interpretation (Spearman)\n\n", sep = "")
-  print(results_fast$plots$model_specific$biomarker_integrated_spearman[[model_name]])
+
+  cat("### ", model_name, "\n\n", sep = "")
+
+  print(
+    results_fast$plots$model_specific$biomarker_integrated_spearman[[model_name]]
+  )
+
   cat("\n")
 }
 ```

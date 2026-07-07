@@ -864,7 +864,6 @@ RUMBLE <- function(input,
   model_specific_plots <- list(
     shap_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
     shap_beeswarm = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
-    shap_prevalence = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
     biomarker_integrated_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot)
   )
 
@@ -878,11 +877,6 @@ RUMBLE <- function(input,
       model_specific_plots$shap_beeswarm[[model_name]] <- plotShapBeeswarm(
         primary_shap, prediction_data = NULL, target_var = outcome_var,
         top_n = top_n, model = model_name
-      )
-      model_specific_plots$shap_prevalence[[model_name]] <- plotTaxaPrevalence(
-        filtered_counts = plot_filtered_counts, metadata = plot_metadata,
-        global_importance = importance$shap_top$spearman, target_var = outcome_var,
-        min_abundance = min_abundance, top_n = top_n, model = model_name
       )
       model_specific_plots$biomarker_integrated_spearman[[model_name]] <- plotBiomarkerIntegrated(
         filtered_counts = plot_filtered_counts, metadata = plot_metadata,
@@ -899,8 +893,6 @@ RUMBLE <- function(input,
     roc       = plotRocCurves(final_models_consolidated, outcome_var),
     cm        = plotConfusionMatrices(final_models_consolidated, outcome_var),
     oof_density = plotOOFDensity(final_models_consolidated, outcome_var),
-    shap_stability = if (nrow(shap_overfitting) > 0) plotShapStability(shap_overfitting) else NULL,
-    model_consistency = plotInterModelConsistency(model_consistency),
     shap_spearman = if (nrow(primary_global_importance) > 0) {
       plotShapGlobal(
         primary_global_importance, outcome_var,
@@ -928,7 +920,6 @@ RUMBLE <- function(input,
         da_results = da_results, metric_name = "Spearman", min_abundance = min_abundance
       )
     } else { NULL },
-    perm_heat = if (nrow(importance$permutation_top) > 0) plotPermutationHeatmap(importance$permutation_top) else NULL,
     shap_vs_permutation = if (nrow(primary_global_importance) > 0 && nrow(importance$permutation_top) > 0) {
       plotSHAPvsPermutation(primary_global_importance, importance$permutation_top, feature_frequency)
     } else { NULL },
@@ -945,16 +936,16 @@ RUMBLE <- function(input,
     prefix <- file.path(output_dir, project_name)
     msg("Saving outputs to: ", output_dir)
 
-    plot_names <- c("metrics", "roc", "cm", "oof_density", "shap_stability",
-                    "model_consistency", "shap_spearman", "shap_beeswarm",
+    plot_names <- c("metrics", "roc", "cm", "oof_density",
+                    "shap_spearman", "shap_beeswarm",
                     "shap_prevalence", "biomarker_integrated_spearman",
-                    "perm_heat", "shap_vs_permutation")
+                    "shap_vs_permutation")
+
     plot_sizes <- list(
       metrics = c(8, 5), roc = c(8, 5), cm = c(10, 8),
-      oof_density = c(10, 6), shap_stability = c(8, 5),
-      model_consistency = c(7, 6), shap_spearman = c(9, 8),
+      oof_density = c(10, 6), shap_spearman = c(9, 8),
       shap_beeswarm = c(10, 8), shap_prevalence = c(9, 8),
-      biomarker_integrated_spearman = c(12, 9), perm_heat = c(9, 8),
+      biomarker_integrated_spearman = c(12, 9),
       shap_vs_permutation = c(9, 7)
     )
 
@@ -971,14 +962,20 @@ RUMBLE <- function(input,
     if (length(shap_models_to_plot) > 0L) {
       for (model_name in shap_models_to_plot) {
         model_slug <- gsub("[^A-Za-z0-9]+", "_", model_name)
+
+        # 1. Salva o SHAP Global de barras do modelo
         if (!is.null(plots$model_specific$shap_spearman[[model_name]])) {
           ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_shap_spearman.png"), plot = plots$model_specific$shap_spearman[[model_name]], width = 9, height = 8, dpi = 300)
         }
+
+        # 2. Salva o Beeswarm do modelo
         if (!is.null(plots$model_specific$shap_beeswarm[[model_name]])) {
           ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_shap_beeswarm.png"), plot = plots$model_specific$shap_beeswarm[[model_name]], width = 10, height = 8, dpi = 300)
         }
-        if (!is.null(plots$model_specific$shap_prevalence[[model_name]])) {
-          ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_shap_prevalence.png"), plot = plots$model_specific$shap_prevalence[[model_name]], width = 9, height = 8, dpi = 300)
+
+        # 3. CORREÇÃO: Salva o Dashboard Biomarker Integrated do modelo
+        if (!is.null(plots$model_specific$biomarker_integrated_spearman[[model_name]])) {
+          ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_biomarker_integrated_spearman.png"), plot = plots$model_specific$biomarker_integrated_spearman[[model_name]], width = 12, height = 9, dpi = 300)
         }
       }
     }

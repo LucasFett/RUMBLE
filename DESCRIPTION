@@ -1,7 +1,7 @@
 Package: RUMBLE
 Type: Package
 Title: Robust Unified Microbiome Biomarker Learning Engine
-Version: 3.1.0
+Version: 3.2.0
 Authors@R: 
     person("Lucas", "Fett", email = "lucas.fett2021@gmail.com",
            role = c("aut", "cre"),
@@ -13,28 +13,27 @@ Description: RUMBLE (Robust Unified Microbiome Biomarker Learning Engine)
     XGBoost, Elastic Net, KNN) via the tidymodels ecosystem with nested
     cross-validation, and provides model-agnostic interpretability through
     SHAP values and permutation importance (via DALEX). It handles
-    compositional microbiome data using multiplicative imputation
-    (zCompositions::cmultRepl) followed by centered log-ratio (CLR)
-    transformations with strict anti-leakage safeguards. Version 3.0
+    compositional microbiome data using centered log-ratio (CLR)
+    transformations with strict anti-leakage safeguards. Version 3.1
     introduces inter-fold stability assessment, feature selection frequency
-    analysis, SHAP overfitting diagnostics (train vs test), hyperparameter
-    stability reporting, cost-sensitive learning for class imbalance,
-    Spearman-based directional metrics, and pooled out-of-fold ROC curves.
-    Descriptive direction metrics replace statistically invalid p-values on
-    SHAP correlations. Differential abundance integration with ANCOM-BC,
-    ALDEx2, and Wilcoxon methods enables rigorous multi-evidence validation
-    of biomarker candidates.
+    analysis, SHAP overfitting diagnostics, hyperparameter stability
+    reporting, cost-sensitive learning for class imbalance, Spearman-based
+    directional metrics, and pooled out-of-fold ROC curves. Descriptive
+    direction metrics replace statistically invalid p-values on SHAP
+    correlations. Differential abundance integration with ANCOM-BC, ALDEx2,
+    and Wilcoxon methods enables rigorous multi-evidence validation of
+    biomarker candidates.
 License: GPL-3
 Encoding: UTF-8
 LazyData: false
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 biocViews:
-    Software,
-    StatisticalMethod,
     Classification,
     Microbiome,
-    Sequencing
+    Sequencing,
+    Software,
+    StatisticalMethod
 Depends:
     R (>= 4.3.0)
 Imports:
@@ -61,7 +60,6 @@ Imports:
     scales,
     stats,
     themis,
-    zCompositions,
     tibble,
     tidyr,
     tune,
@@ -71,21 +69,21 @@ Imports:
     workflows,
     yardstick
 Suggests:
-    ANCOMBC,
     ALDEx2,
-    TreeSummarizedExperiment,
-    fastshap,
+    ANCOMBC,
     BiocStyle,
+    fastshap,
+    ggrepel,
+    glmnet,
+    kknn,
     knitr,
+    magick,
+    ranger,
     rmarkdown,
     testthat (>= 3.0.0),
     tidymodels,
-    glmnet,
-    kknn,
-    ranger,
-    xgboost,
-    magick,
-    zCompositions
+    TreeSummarizedExperiment,
+    xgboost
 VignetteBuilder: knitr
 BugReports: https://github.com/LucasFett/RUMBLE/issues
 URL: https://github.com/LucasFett/RUMBLE

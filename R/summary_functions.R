@@ -209,7 +209,7 @@ analyzeOOFPredictions <- function(oof_preds, target_var) {
 
   # 1. Análise de Confiança Média
   # Extraímos dinamicamente a probabilidade atribuída à classe REAL daquela amostra
-  probs <- sapply(seq_len(nrow(oof_preds)), function(i) {
+  probs <- vapply(seq_len(nrow(oof_preds)), function(i) {
     class_name <- truth_vec[i]
     prob_col <- paste0(".pred_", class_name)
 
@@ -218,7 +218,7 @@ analyzeOOFPredictions <- function(oof_preds, target_var) {
     } else {
       return(NA_real_)
     }
-  })
+  }, numeric(1L)) # <-- Aqui está a diferença: declaramos que o retorno é numérico
 
   conf_df <- oof_preds %>%
     dplyr::mutate(
