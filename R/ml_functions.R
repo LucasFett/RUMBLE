@@ -10,7 +10,7 @@
 #'
 #' @importFrom recipes recipe step_zv step_normalize step_corr
 #'      all_predictors
-# REMOVIDO: themis::step_downsample (usando Case Weights para balanceamento)
+#' @importFrom themis step_downsample
 #' @importFrom parsnip rand_forest boost_tree logistic_reg
 #'      nearest_neighbor set_engine set_mode fit
 #' @importFrom workflows workflow add_model add_recipe
@@ -64,33 +64,48 @@ NULL
 #'    irrelevant but does not harm performance.
 #' 3. Optional correlation filter (step_corr) if threshold is provided.
 #'
-#' \strong{Note on Class Imbalance:} Class imbalance is now handled via
-#' cost-sensitive learning (case weights) rather than downsampling. This
-#' preserves 100% of the original data, which is critical for small cohorts
-#' (N < 200) where discarding samples destroys variance structure and reduces
-#' statistical power.
+#' \strong{Note on Class Imbalance:} Class imbalance can be handled via
+#' three methods controlled by \code{class_balance_method}:
+#' \itemize{
+#'   \item \code{"downsample"}: Reduces majority class to match minority class size.
+#'   \item \code{"class_weights"}: Applies native per-class weighting at the
+#'     engine level (RF via \code{ranger::class.weights}, XGB via
+#'     \code{xgboost::scale_pos_weight}), preserving 100\% of the training
+#'     data. ENET and KNN have no native per-class weighting mechanism in
+#'     their respective engines and are fit unweighted under this mode; see
+#'     \code{.buildWorkflows()} for details.
+#'   \item \code{"none"}: No class balancing applied (useful for already-balanced data).
+#' }
 #'
 #' @noRd
 .buildRecipe <- function(train_data, target_var,
-                         balance_classes = TRUE, seed = 42L,
+                         class_balance_method = c("downsample", "class_weights", "none"),
+                         seed = 42L,
                          correlation_threshold = NULL) {
 
+  class_balance_method <- match.arg(class_balance_method)
+
+  # Criar a fórmula com todos os preditores. Ao contrário da abordagem
+  # anterior baseada em case weights, "class_weights" não precisa de
+  # nenhuma coluna extra nem de update_role() aqui -- os pesos por classe
+  # são passados diretamente aos engines (ranger/xgboost) em
+  # .buildWorkflows(), então a recipe permanece igual em todos os modos.
   rec <- recipes::recipe(
     stats::as.formula(paste(target_var, "~ .")),
     data = train_data
   )
 
-  # Não precisamos mais do update_role para case_weight
-
   rec <- rec %>%
     recipes::step_zv(recipes::all_predictors()) %>%
     recipes::step_normalize(recipes::all_predictors())
 
-  # Aplicando o Downsampling logo após a normalização
-  if (balance_classes) {
+  if (class_balance_method == "downsample") {
     rec <- rec %>%
       themis::step_downsample(!!rlang::sym(target_var), seed = seed)
   }
+  # "class_weights": nada a fazer na recipe; os pesos por classe são
+  # aplicados diretamente nos model spec's engine args, em .buildWorkflows().
+  # "none": nada a fazer.
 
   if (!is.null(correlation_threshold)) {
     rec <- rec %>%
@@ -103,26 +118,96 @@ NULL
 ## ------------------------------------------------------------------
 ## Define model workflows
 ## ------------------------------------------------------------------
+#' Build model workflows for the four base learners.
+#'
+#' \strong{Note on \code{class_balance_method = "class_weights"}:} weights are
+#' applied natively at the engine level, not via the generic tidymodels
+#' case-weights framework, because that framework (1) requires
+#' \code{recipes}/\code{workflows} plumbing that proved fragile in practice
+#' (e.g. \code{recipes::recipe()} does not accept \code{~ . - col} formula
+#' syntax to exclude a weights column, and role-based workarounds add
+#' complexity), and (2) does not have uniform support across the four engines
+#' used here (notably \code{kknn}, which does not support case weights at
+#' all). Native per-class weighting is simpler and avoids that whole class of
+#' bug, at the cost of only being available for engines that expose a
+#' class-level (not just observation-level) weighting argument:
+#' \itemize{
+#'   \item \strong{RF (ranger)}: \code{class.weights}, a numeric vector named
+#'     by outcome factor level, applied via \code{set_engine()}.
+#'   \item \strong{XGB (xgboost)}: \code{scale_pos_weight}, the
+#'     negative/positive class count ratio, applied via \code{set_engine()}.
+#'   \item \strong{ENET (glmnet)} and \strong{KNN (kknn)}: neither engine
+#'     exposes a native per-class weighting argument (glmnet only supports
+#'     per-observation weights, which would require the same fragile
+#'     case-weights plumbing we are moving away from; kknn supports neither).
+#'     These two models are fit \emph{without} imbalance correction under
+#'     \code{"class_weights"} mode. A warning is emitted once per call to
+#'     make this explicit rather than silent.
+#' }
+#'
 #' @noRd
-.buildWorkflows <- function(recipe, xgb_trees = 1000L, rf_trees = 500L, seed = 42L) {
-  models <- list(
-    RF = parsnip::rand_forest(
-      mtry = tune::tune(),
-      trees = rf_trees,
-      min_n = tune::tune()
-    ) %>%
-      parsnip::set_engine("ranger", num.threads = 1, seed = seed) %>%
-      parsnip::set_mode("classification"),
+.buildWorkflows <- function(recipe, xgb_trees = 1000L, rf_trees = 500L, seed = 42L,
+                            class_balance_method = "downsample",
+                            class_weights_rf = NULL,
+                            scale_pos_weight_xgb = NULL) {
 
-    XGB = parsnip::boost_tree(
-      trees = xgb_trees,
-      tree_depth = tune::tune(),
-      learn_rate = tune::tune(),
-      loss_reduction = tune::tune(),
-      min_n = tune::tune()
-    ) %>%
-      parsnip::set_engine("xgboost", nthread = 1) %>%
-      parsnip::set_mode("classification"),
+  use_class_weights <- identical(class_balance_method, "class_weights")
+
+  if (use_class_weights && (is.null(class_weights_rf) || is.null(scale_pos_weight_xgb))) {
+    warning(
+      "class_balance_method = 'class_weights' was requested but ",
+      "class_weights_rf/scale_pos_weight_xgb were not supplied. ",
+      "RF and XGB will be fit WITHOUT class weighting for this fold.",
+      call. = FALSE
+    )
+    use_class_weights <- FALSE
+  }
+
+  if (use_class_weights) {
+    message(
+      "  class_balance_method = 'class_weights': applying native weighting ",
+      "to RF (ranger::class.weights) and XGB (xgboost::scale_pos_weight). ",
+      "ENET and KNN have no native per-class weighting mechanism and are ",
+      "fit unweighted under this mode."
+    )
+  }
+
+  rf_spec <- parsnip::rand_forest(
+    mtry = tune::tune(),
+    trees = rf_trees,
+    min_n = tune::tune()
+  ) %>%
+    parsnip::set_mode("classification")
+
+  rf_spec <- if (use_class_weights) {
+    rf_spec %>% parsnip::set_engine(
+      "ranger", num.threads = 1, seed = seed,
+      class.weights = class_weights_rf
+    )
+  } else {
+    rf_spec %>% parsnip::set_engine("ranger", num.threads = 1, seed = seed)
+  }
+
+  xgb_spec <- parsnip::boost_tree(
+    trees = xgb_trees,
+    tree_depth = tune::tune(),
+    learn_rate = tune::tune(),
+    loss_reduction = tune::tune(),
+    min_n = tune::tune()
+  ) %>%
+    parsnip::set_mode("classification")
+
+  xgb_spec <- if (use_class_weights) {
+    xgb_spec %>% parsnip::set_engine(
+      "xgboost", nthread = 1, scale_pos_weight = scale_pos_weight_xgb
+    )
+  } else {
+    xgb_spec %>% parsnip::set_engine("xgboost", nthread = 1)
+  }
+
+  models <- list(
+    RF = rf_spec,
+    XGB = xgb_spec,
 
     ENET = parsnip::logistic_reg(
       penalty = tune::tune(),
@@ -139,7 +224,7 @@ NULL
       parsnip::set_mode("classification")
   )
 
-  purrr::map(models, function(mod) {
+  purrr::imap(models, function(mod, model_name) {
     workflows::workflow() %>%
       workflows::add_model(mod) %>%
       workflows::add_recipe(recipe)

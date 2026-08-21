@@ -9,7 +9,7 @@
 #' @param n_folds Integer. Total number of outer folds.
 #' @return Data.frame with democratic global and per-model frequencies.
 #' @export
-calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L) {
+calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L, min_fold_frequency = 0.7) {
   if (nrow(shap_raw) == 0 || !"fold" %in% colnames(shap_raw)) {
     return(data.frame(variable = character(0), n_folds_present = integer(0), fold_frequency = numeric(0)))
   }
@@ -57,6 +57,7 @@ calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L) {
   result <- freq_global %>%
     dplyr::full_join(freq_model_wide, by = "variable") %>%
     dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~tidyr::replace_na(., 0))) %>%
+    dplyr::mutate(is_stable = fold_frequency >= min_fold_frequency) %>%
     dplyr::arrange(dplyr::desc(fold_frequency), dplyr::desc(n_folds_present))
 
   return(result)

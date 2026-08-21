@@ -64,14 +64,25 @@
 #' @param min_fold_frequency Numeric. Minimum fraction of outer folds in which
 #'   a feature must appear in the top-N to be included in the consensus ranking
 #'   (default 0.7, i.e., 70 percent of folds). This filters out unstable
-#'   features that appear sporadically.
+#'   features that appear sporadically (only applied if \code{apply_stability_filter = TRUE}).
 #' @param remove_unclassified Logical. Whether to remove taxa with
 #'   names matching common unclassified patterns (default \code{FALSE}).
 #' @param unclassified_patterns Character. Regex pattern for identifying
 #'   unclassified taxa. Only used when \code{remove_unclassified = TRUE}.
 #'   Default: \code{"uncultured|unknown|unclassified"}.
-#' @param normalization_method Character. Method for compositional normalization.
-#'   Currently only \code{"clr"} is supported (default).
+
+#' @param class_balance_method Character. Method for handling class imbalance during
+#'   model training. Options are \code{"downsample"} (default, reduces majority
+#'   class to match minority class size), \code{"class_weights"} (applies native
+#'   per-class weighting at the engine level -- \code{ranger::class.weights} for
+#'   RF and \code{xgboost::scale_pos_weight} for XGB -- preserving 100 percent of
+#'   the training data; ENET and KNN have no native per-class weighting mechanism
+#'   and are fit unweighted under this mode, see \code{.buildWorkflows()}), or
+#'   \code{"none"} (no balancing, useful for already-balanced data).
+#' @param apply_stability_filter Logical. Whether to filter features based on
+#'   \code{min_fold_frequency} in the final biomarker table and plots (default \code{FALSE}).
+#'   When \code{FALSE}, all features are retained; when \code{TRUE}, only features
+#'   appearing in at least \code{min_fold_frequency} fraction of folds are included.
 #' @param seed Integer. Random seed for reproducibility (default 42).
 #' @param verbose Logical. Whether to print progress messages (default TRUE).
 #' @param metric_cutoffs Named numeric vector. Optional quality filter for
@@ -150,7 +161,8 @@ RUMBLE <- function(input,
                    min_fold_frequency = 0.7,
                    remove_unclassified = FALSE,
                    unclassified_patterns = "uncultured|unknown|unclassified",
-                   normalization_method = "clr",
+                   class_balance_method = c("downsample", "class_weights", "none"),
+                   apply_stability_filter = FALSE,
                    seed = 42L,
                    verbose = TRUE,
                    shap_method = "exact",
@@ -164,12 +176,19 @@ RUMBLE <- function(input,
   }
 
   ## ==================================================================
-  ## 0. EARLY VALIDATION
+  ## 0. EARLY VALIDATION & CLEANUP
   ## ==================================================================
 
+  # Garantir que workers paralelos sejam limpos ao sair da função,
+  # mesmo em caso de erro. Isso evita que workers zumbis fiquem pendurados
+  # entre chamadas de RUMBLE(), o que pode causar travamentos.
+  on.exit(future::plan("sequential"), add = TRUE)
 
   # Validate da_method parameter
   da_method <- match.arg(da_method)
+
+  # Validate class_balance_method parameter
+  class_balance_method <- match.arg(class_balance_method)
 
   # Early validation: Check if input is relative abundance when DA requires counts
 
@@ -212,7 +231,6 @@ RUMBLE <- function(input,
     min_abundance = min_abundance,
     remove_unclassified = remove_unclassified,
     unclassified_patterns = unclassified_patterns,
-    normalization_method = normalization_method,
     verbose = verbose
   )
 
@@ -331,12 +349,60 @@ RUMBLE <- function(input,
     msg("  Train: ", nrow(train_data), " | Test: ", nrow(test_data))
 
     # ---------------------------------------------------------------
-    # SEPARAÇÃO ESTRITA: CLR aplicado intra-fold para evitar críticas de Data Leakage
+    #%% [ORIGINAL -- pré-commit1] CLR era aplicado ANTES do filtro de
+    #%% prevalência intra-fold, violando o que a Seção 2.1.1 do manuscrito
+    #%% promete. O geometric mean por amostra usado no CLR incluía taxa que
+    #%% seriam descartados logo em seguida pelo filtro.
+    #%%
+    #%% train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
+    #%% test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
+    #%% # ---------------------------------------------------------------
+    #%% # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
+    #%% # ---------------------------------------------------------------
+    #%% train_ids <- rownames(train_data)
+    #%% train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
+    #%% train_depths <- rowSums(train_counts)
+    #%% train_depths[train_depths == 0] <- 1
+    #%% train_rel <- sweep(train_counts, 1, train_depths, "/")
+    #%% prev_train <- colMeans(train_rel > min_abundance)
+    #%% valid_taxa <- names(prev_train)[prev_train >= min_prevalence]
+    #%% cols_to_keep <- c(valid_taxa, outcome_var)
+    #%% train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
+    #%% test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
     # ---------------------------------------------------------------
-    train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
-    test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
+
+    #%% [ORIGINAL -- pré-commit1] CLR era aplicado ANTES do filtro de
+    #%% prevalência intra-fold, violando o que a Seção 2.1.1 do manuscrito
+    #%% promete. O geometric mean por amostra usado no CLR incluía taxa que
+    #%% seriam descartados logo em seguida pelo filtro.
+    #%%
+    #%% # ---------------------------------------------------------------
+    #%% # SEPARAÇÃO ESTRITA: CLR aplicado intra-fold para evitar críticas de Data Leakage
+    #%% # ---------------------------------------------------------------
+    #%% train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
+    #%% test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
+    #%% # ---------------------------------------------------------------
+    #%% # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
+    #%% # ---------------------------------------------------------------
+    #%% train_ids <- rownames(train_data)
+    #%% train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
+    #%% train_depths <- rowSums(train_counts)
+    #%% train_depths[train_depths == 0] <- 1
+    #%% train_rel <- sweep(train_counts, 1, train_depths, "/")
+    #%% prev_train <- colMeans(train_rel > min_abundance)
+    #%% valid_taxa <- names(prev_train)[prev_train >= min_prevalence]
+    #%% cols_to_keep <- c(valid_taxa, outcome_var)
+    #%% train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
+    #%% test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
+
     # ---------------------------------------------------------------
     # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
+    # Executado ANTES do CLR (correção pós-submissão): a Seção 2.1.1 do
+    # manuscrito promete que o CLR opera apenas sobre os taxa que
+    # sobrevivem ao filtro de prevalência intra-fold. Antes desta correção,
+    # o CLR era calculado sobre a tabela completa (pré-filtro), fazendo o
+    # log-geometric-mean por amostra incluir taxa que seriam descartados
+    # a seguir -- inconsistente com o texto e com o desenho anti-leakage.
     # ---------------------------------------------------------------
     train_ids <- rownames(train_data)
     train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
@@ -350,29 +416,70 @@ RUMBLE <- function(input,
     prev_train <- colMeans(train_rel > min_abundance)
     valid_taxa <- names(prev_train)[prev_train >= min_prevalence]
 
-    # Keep only validated taxa + target variable
+    # Keep only validated taxa + target variable (still pre-CLR here)
     cols_to_keep <- c(valid_taxa, outcome_var)
 
-    # Filter datasets before they touch the model
     train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
     test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
 
     msg("  Anti-Leakage: Retained ", length(valid_taxa), " taxa prevalent in training fold.")
     # ---------------------------------------------------------------
 
+    # ---------------------------------------------------------------
+    # SEPARAÇÃO ESTRITA: CLR aplicado intra-fold, agora SOMENTE sobre os
+    # taxa que sobreviveram ao filtro de prevalência acima. O treino define
+    # os taxa retidos (train_data_filtered); o mesmo conjunto de colunas é
+    # aplicado ao teste (test_data_filtered) antes do CLR, garantindo que
+    # ambos os conjuntos tenham o mesmo espaço composicional.
+    # ---------------------------------------------------------------
+    train_data_filtered <- .apply_clr(train_data_filtered, outcome_var, pseudocount = 1e-6)
+    test_data_filtered  <- .apply_clr(test_data_filtered, outcome_var, pseudocount = 1e-6)
+    # ---------------------------------------------------------------
 
     # ---------------------------------------------------------------
+    # CLASS BALANCE: calcula pesos nativos por classe SE
+    # class_balance_method == "class_weights". Mantido após o filtro de
+    # prevalência e o CLR, pois depende apenas da coluna outcome_var em
+    # train_data_filtered (já filtrado), não dos valores CLR-transformados
+    # das colunas de taxa. Ao contrario da abordagem anterior (case weights
+    # via coluna + workflows::add_case_weights), aqui nao se anexa nenhuma
+    # coluna extra a train_data_filtered -- os pesos sao passados
+    # diretamente aos engines em .buildWorkflows().
+    # ---------------------------------------------------------------
+    class_weights_rf <- NULL
+    scale_pos_weight_xgb <- NULL
+    if (class_balance_method == "class_weights") {
+      y <- train_data_filtered[[outcome_var]]
+      tab <- table(y)
+
+      # RF (ranger::class.weights): peso inverso a frequencia da classe,
+      # nomeado pelos levels do fator (equivalente a class_weight="balanced").
+      w <- length(y) / (length(tab) * tab)
+      class_weights_rf <- stats::setNames(as.numeric(w), names(tab))
+
+      # XGB (xgboost::scale_pos_weight): razao negativos/positivos, na
+      # definicao padrao do proprio xgboost. A classe positiva e' sempre o
+      # segundo level do fator outcome (ver class_of_interest/RUMBLE()).
+      negative_class <- levels(y)[1]
+      positive_class <- levels(y)[2]
+      scale_pos_weight_xgb <- as.numeric(tab[[negative_class]] / tab[[positive_class]])
+    }
 
     # Build recipe and workflows
     set.seed(seed)
     recipe <- .buildRecipe(
       train_data_filtered,
       outcome_var,
-      balance_classes = TRUE,
+      class_balance_method = class_balance_method,
       seed = seed,
       correlation_threshold = correlation_threshold
     )
-    workflows <- .buildWorkflows(recipe, xgb_trees = xgb_trees, rf_trees = rf_trees, seed = seed)
+    workflows <- .buildWorkflows(
+      recipe, xgb_trees = xgb_trees, rf_trees = rf_trees, seed = seed,
+      class_balance_method = class_balance_method,
+      class_weights_rf = class_weights_rf,
+      scale_pos_weight_xgb = scale_pos_weight_xgb
+    )
 
     # Tune models (Inner loop)
     tuned <- .tuneModels(
@@ -510,16 +617,24 @@ RUMBLE <- function(input,
       class_of_interest = class_of_interest
     )
 
-    model_weights <- purrr::map_dbl(explainable_models, function(mod) {
-      metrics_df <- mod$metrics
-      bal_acc_row <- metrics_df[metrics_df$.metric == "bal_accuracy", ]
-      if (nrow(bal_acc_row) > 0 && !is.na(bal_acc_row$.estimate[1])) return(bal_acc_row$.estimate[1])
-      auc_row <- metrics_df[metrics_df$.metric == "roc_auc", ]
-      if (nrow(auc_row) > 0 && !is.na(auc_row$.estimate[1])) return(auc_row$.estimate[1])
-      return(1.0)
-    })
-    model_weights <- pmax(model_weights, 0.01)
-    model_weights <- model_weights / sum(model_weights)
+    #%% [ORIGINAL -- pré-commit1] model_weights por-fold removido: usava
+    #%% bal_accuracy/roc_auc do fold atual (não MCC agregado dos outer
+    #%% folds), sem o w_min documentado na Equação 5, e alimentava apenas
+    #%% o global_importance morto de computeFeatureImportance() -- nunca
+    #%% chegava às tabelas de consenso reportadas no artigo. O único
+    #%% mecanismo de ponderação por performance agora é global_weights
+    #%% (Seção 5.5 abaixo), que implementa fielmente a Equação 5.
+    #%%
+    #%% model_weights <- purrr::map_dbl(explainable_models, function(mod) {
+    #%%   metrics_df <- mod$metrics
+    #%%   bal_acc_row <- metrics_df[metrics_df$.metric == "bal_accuracy", ]
+    #%%   if (nrow(bal_acc_row) > 0 && !is.na(bal_acc_row$.estimate[1])) return(bal_acc_row$.estimate[1])
+    #%%   auc_row <- metrics_df[metrics_df$.metric == "roc_auc", ]
+    #%%   if (nrow(auc_row) > 0 && !is.na(auc_row$.estimate[1])) return(auc_row$.estimate[1])
+    #%%   return(1.0)
+    #%% })
+    #%% model_weights <- pmax(model_weights, 0.01)
+    #%% model_weights <- model_weights / sum(model_weights)
 
     imp_train <- NULL
     imp_test <- NULL
@@ -530,7 +645,7 @@ RUMBLE <- function(input,
       explainers, res$train_data, outcome_var,
       class_of_interest = class_of_interest, top_n = top_n,
       repetitions = shap_reps, n_cores = n_cores, shap_method = shap_method,
-      verbose = FALSE, model_weights = model_weights
+      verbose = FALSE
     )
     if (!is.null(imp_train) && nrow(imp_train$shap_raw) > 0) {
       imp_train$shap_raw$fold <- res$fold_id
@@ -541,7 +656,7 @@ RUMBLE <- function(input,
       explainers, res$test_data, outcome_var,
       class_of_interest = class_of_interest, top_n = top_n,
       repetitions = shap_reps, n_cores = n_cores, shap_method = shap_method,
-      verbose = FALSE, model_weights = model_weights
+      verbose = FALSE
     )
     if (!is.null(imp_test) && nrow(imp_test$shap_raw) > 0) {
       imp_test$shap_raw$fold <- res$fold_id
@@ -641,7 +756,7 @@ RUMBLE <- function(input,
     msg("Calculating feature selection frequency across folds...")
 
     feature_frequency <- calculateFeatureFrequency(
-      primary_shap, top_n = top_n, n_folds = outer_folds
+      primary_shap, top_n = top_n, n_folds = outer_folds, min_fold_frequency = min_fold_frequency
     )
 
     # Filter features by min_fold_frequency
@@ -675,14 +790,20 @@ RUMBLE <- function(input,
         dplyr::summarise(
           # Usa a variável escalonada aqui!
           mean_abs_contribution = stats::weighted.mean(scaled_abs_contribution, w = weight, na.rm = TRUE),
-          # Calcula a direção on-the-fly com os vetores originais
-          SHAP_Rho = .compute_direction_internal(feature_value, contribution),
+          #%% [ORIGINAL -- pré-commit1] SHAP_Rho = .compute_direction_internal(feature_value, contribution),
+          #%% Não-ponderado: a métrica de direção ignorava o peso MCC que
+          #%% já ponderava a magnitude ao lado (linha acima), quebrando a
+          #%% Equação 5 do manuscrito, que define um único esquema de
+          #%% ponderação por MCC aplicado ao consenso.
+          # Calcula a direção on-the-fly com os vetores originais, agora
+          # ponderada pelo mesmo `weight` (MCC-based, Eq. 5) usado na magnitude
+          SHAP_Rho = .compute_direction_internal(feature_value, contribution, weight = weight),
           n_models  = dplyr::n_distinct(model),
           n_folds   = dplyr::n_distinct(fold),
           .groups   = "drop"
         ) %>%
         dplyr::left_join(
-          feature_frequency[, c("variable", "fold_frequency", "n_folds_present")],
+          feature_frequency[, c("variable", "fold_frequency", "n_folds_present", "is_stable")],
           by = "variable"
         ) %>%
         dplyr::arrange(dplyr::desc(mean_abs_contribution))
@@ -713,13 +834,17 @@ RUMBLE <- function(input,
         dplyr::summarise(
           # Usa a variável escalonada aqui também!
           mean_abs_contribution = stats::weighted.mean(scaled_abs_contribution, w = weight, na.rm = TRUE),
-          SHAP_Rho = .compute_direction_internal(feature_value, contribution),
+          #%% [ORIGINAL -- pré-commit1] SHAP_Rho = .compute_direction_internal(feature_value, contribution),
+          #%% Mesma correção do bloco de teste acima: direção agora
+          #%% ponderada pelo `weight` MCC-based (Eq. 5), consistente com
+          #%% a magnitude na linha anterior.
+          SHAP_Rho = .compute_direction_internal(feature_value, contribution, weight = weight),
           n_models  = dplyr::n_distinct(model),
           n_folds   = dplyr::n_distinct(fold),
           .groups   = "drop"
         ) %>%
         dplyr::left_join(
-          feature_frequency[, c("variable", "fold_frequency", "n_folds_present")],
+          feature_frequency[, c("variable", "fold_frequency", "n_folds_present", "is_stable")],
           by = "variable"
         ) %>%
         dplyr::arrange(dplyr::desc(mean_abs_contribution))
@@ -832,6 +957,14 @@ RUMBLE <- function(input,
     importance$global_importance_test$spearman
   } else {
     importance$global_importance_train$spearman
+  }
+
+  if (isTRUE(apply_stability_filter) && "is_stable" %in% colnames(primary_global_importance)) {
+    n_before <- nrow(primary_global_importance)
+    primary_global_importance <- primary_global_importance %>%
+      dplyr::filter(is_stable)
+    msg("Stability filter ON: retained ", nrow(primary_global_importance),
+        " / ", n_before, " features (fold_frequency >= ", min_fold_frequency, ")")
   }
 
   # Integrated biomarker table (primary)
@@ -1168,13 +1301,13 @@ RUMBLE <- function(input,
     saveRDS(fold_results, paste0(prefix, "_trained_fold_models.rds"))
 
     msg("All outputs saved.")
-  } # <--- CHAVE AUSENTE 1: Fecha o bloco `if (!is.null(output_dir)) {`
+  }
 
   msg("======================================================")
   msg("RUMBLE Pipeline complete (Nested CV Mode).")
   msg("======================================================")
 
-  # Retorno final da função RUMBLE (Isso precisa estar aqui!)
+  # Retorno final da função RUMBLE
   list(
     models              = final_models_consolidated,
     metrics             = metrics_summary,
@@ -1192,7 +1325,7 @@ RUMBLE <- function(input,
     hyperparameter_stability = hyperparameter_stability,
     metrics_per_fold    = all_metrics
   )
-} # <--- CHAVE AUSENTE 2: Fecha a função RUMBLE() principal
+}
 
 ## ==================================================================
 ## Internal Helper Functions

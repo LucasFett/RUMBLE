@@ -92,7 +92,6 @@ results <- RUMBLE(
   outcome_var = "ses",
   class_of_interest = "Low",
   tax_level = "Genus",
-  shap_data = "train",  # Mandatory: choose between 'train', 'test', or 'all'
   output_dir = "rumble_results",
   verbose = TRUE
 )
@@ -126,14 +125,16 @@ The table below summarizes the most relevant arguments for practical use and rev
 | Argument | Analytical role | Default |
 |---|---|---|
 | `tax_level` | Aggregates taxa at a chosen taxonomic rank | `NULL` |
-| `normalization_method` | Currently only `"clr"` (Centered Log-Ratio) is supported | `"clr"` |
+| `class_balance_method` | Controls class imbalance handling (`"downsample"`, `"class_weights"`, or `"none"`) | `"downsample"` |
+| `apply_stability_filter` | Filters unstable features from final interpretations based on `min_fold_frequency` | `FALSE` |
 | `grid_size` | Controls tuning intensity | `30` |
-| `shap_reps` | Number of repetitions for SHAP and permutation importance | `100` |
-| `shap_data` | Dataset used for SHAP computation (`"train"`, `"test"`, or `"all"`) | **Mandatory** |
+| `shap_reps` | Number of repetitions for SHAP and permutation importance | `25` |
 | `shap_method` | SHAP strategy (`"exact"` or `"fast"`) | `"exact"` |
 | `metric_cutoffs` | Minimum quality filter for selecting interpretable models | `NULL` |
 | `shap_model` | Controls which model-specific SHAP profiles are generated | `"all"` |
 | `output_dir` | Directory used for automatic export of plots and tables | `NULL` |
+
+**Note:** SHAP importance is always computed on both the training and test partitions internally; there is no `shap_data` argument to choose between them. The test-set signature is used as the primary consensus source when available (`results$importance$global_importance_test`), and the training-set signature is retained for the overfitting diagnostic (`results$shap_overfitting`).
 
 ---
 
@@ -146,10 +147,18 @@ The table below summarizes the most relevant arguments for practical use and rev
 | `models` | Final fitted models and test-set predictions |
 | `metrics` | Summary table of model performance metrics across outer test folds |
 | `cv_metrics` | Strict, configuration-matched inner loop CV metrics for assessing Generalization Gap |
-| `importance` | Raw SHAP, model-specific SHAP summaries, global consensus, and permutation importance |
-| `plots` | Performance and interpretability plots |
-| `data` | Prepared training and test data |
+| `importance` | Raw SHAP (train/test), model-specific SHAP summaries, weighted global consensus, and permutation importance |
+| `plots` | Performance and interpretability plots (see below) |
 | `selected_models` | Models retained for interpretability after applying `metric_cutoffs` |
+| `hyperparameters` | Best hyperparameter configuration selected per model, per outer fold |
+| `shap_overfitting` | Train-vs-test SHAP ranking correlation per model (explanation stability diagnostic) |
+| `model_consistency` | Pairwise inter-model agreement (Jaccard similarity, Spearman correlation) on SHAP rankings |
+| `da_results` | Differential abundance results (only if `run_da = TRUE`) |
+| `integrated_table` | Final consensus biomarker table (SHAP magnitude, direction, prevalence, DA effect size) |
+| `shap_consistency` | Inter-fold SHAP ranking stability per model |
+| `feature_frequency` | Per-model and consensus top-N selection frequency across outer folds (always unfiltered, regardless of `apply_stability_filter`) |
+| `hyperparameter_stability` | Variance of selected hyperparameters across outer folds |
+| `metrics_per_fold` | Raw per-fold performance metrics (before summarization into `metrics`) |
 
 In practice, this means that the interpretability stage does not need to include every trained model. The `selected_models` object explicitly records which algorithms were considered eligible for the final interpretation layer.
 
@@ -247,7 +256,7 @@ When `output_dir` is defined, the package automatically writes plots and tables 
 | Consensus SHAP | `*_shap_global_spearman.tsv` |
 | Model-specific SHAP | `*_shap_model_spearman.tsv` |
 | Permutation importance | `*_permutation_top.tsv` |
-| Global figures | `*_roc.png`, `*_cm.png`, `*_shap_spearman.png` |
+| Global figures | `*_roc.png`, `*_cm.png`, `*_oof_density.png`, `*_shap_spearman.png` |
 | Model-specific figures | `*_RF_shap_spearman.png`, `*_XGB_shap_beeswarm.png`, and related outputs |
 
 This organization makes the output directory substantially more reviewer-friendly because direct inspection no longer depends on manual extraction from the returned object.
@@ -256,7 +265,7 @@ This organization makes the output directory substantially more reviewer-friendl
 
 ## Nested Cross-Validation & Generalization Gap
 
-RUMBLE 3.1.0 enforces strict mathematical alignment in the extraction of metrics from the **Nested Cross-Validation** inner loop. When the hyperparameter tuning step selects the winning configuration (e.g., the one that maximizes MCC), RUMBLE extracts all other metrics (AUC, Accuracy, F1, etc.) exclusively from that exact same configuration (`.config`). 
+RUMBLE 3.1.0 enforces strict mathematical alignment in the extraction of metrics from the **Nested Cross-Validation** inner loop. When the hyperparameter tuning step selects the winning configuration (e.g., the one that maximizes MCC), RUMBLE extracts all other metrics (AUC, Accuracy, F1, etc.) exclusively from that exact same configuration (`.config`).
 
 This prevents "Optimization Reporting Bias" (where one might incorrectly report the maximum AUC from configuration A alongside the maximum MCC from configuration B). The resulting `results$cv_metrics` table provides an accurate estimation of inner-fold performance. Comparing these inner metrics with the outer-fold test metrics (`results$metrics`) allows researchers to rigorously assess the **Generalization Gap** and diagnose potential model overfitting before deriving biomarker interpretations.
 

@@ -4,7 +4,12 @@
 \alias{calculateFeatureFrequency}
 \title{Calculate Feature Selection Frequency Across Folds (Consensus and Per-Model)}
 \usage{
-calculateFeatureFrequency(shap_raw, top_n = 20L, n_folds = 5L)
+calculateFeatureFrequency(
+  shap_raw,
+  top_n = 20L,
+  n_folds = 5L,
+  min_fold_frequency = 0.7
+)
 }
 \arguments{
 \item{shap_raw}{Data.frame of raw SHAP values with 'fold' and 'model' columns.}

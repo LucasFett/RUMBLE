@@ -26,7 +26,8 @@ RUMBLE(
   min_fold_frequency = 0.7,
   remove_unclassified = FALSE,
   unclassified_patterns = "uncultured|unknown|unclassified",
-  normalization_method = "clr",
+  class_balance_method = c("downsample", "class_weights", "none"),
+  apply_stability_filter = FALSE,
   seed = 42L,
   verbose = TRUE,
   shap_method = "exact",
@@ -100,7 +101,7 @@ consider a taxon present (default 0.0001).}
 \item{min_fold_frequency}{Numeric. Minimum fraction of outer folds in which
 a feature must appear in the top-N to be included in the consensus ranking
 (default 0.7, i.e., 70 percent of folds). This filters out unstable
-features that appear sporadically.}
+features that appear sporadically (only applied if \code{apply_stability_filter = TRUE}).}
 
 \item{remove_unclassified}{Logical. Whether to remove taxa with
 names matching common unclassified patterns (default \code{FALSE}).}
@@ -109,8 +110,19 @@ names matching common unclassified patterns (default \code{FALSE}).}
 unclassified taxa. Only used when \code{remove_unclassified = TRUE}.
 Default: \code{"uncultured|unknown|unclassified"}.}
 
-\item{normalization_method}{Character. Method for compositional normalization.
-Currently only \code{"clr"} is supported (default).}
+\item{class_balance_method}{Character. Method for handling class imbalance during
+model training. Options are \code{"downsample"} (default, reduces majority
+class to match minority class size), \code{"class_weights"} (applies native
+per-class weighting at the engine level -- \code{ranger::class.weights} for
+RF and \code{xgboost::scale_pos_weight} for XGB -- preserving 100 percent of
+the training data; ENET and KNN have no native per-class weighting mechanism
+and are fit unweighted under this mode, see \code{.buildWorkflows()}), or
+\code{"none"} (no balancing, useful for already-balanced data).}
+
+\item{apply_stability_filter}{Logical. Whether to filter features based on
+\code{min_fold_frequency} in the final biomarker table and plots (default \code{FALSE}).
+When \code{FALSE}, all features are retained; when \code{TRUE}, only features
+appearing in at least \code{min_fold_frequency} fraction of folds are included.}
 
 \item{seed}{Integer. Random seed for reproducibility (default 42).}
 

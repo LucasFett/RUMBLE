@@ -18,6 +18,12 @@ createExplainers <- function(final_models, data, target_var,
                              class_of_interest) {
   message("Creating DALEX explainers...")
 
+  # Nota: Se o paralelismo for ativado na etapa de computacao de importancia
+  # (via furrr/future), modelos XGBoost podem causar erro de serializacao
+  # (externalptr nao pode ser passado para workers multisession sem serializacao
+  # explicita). Se isso ocorrer, considere usar future::plan(sequential) apenas
+  # nesta etapa, ou serializar o modelo XGB via xgb.save.raw()/xgb.load.raw().
+
   # Validate class_of_interest
   if (missing(class_of_interest)) {
     stop("'class_of_interest' is required in createExplainers().")
@@ -38,8 +44,13 @@ createExplainers <- function(final_models, data, target_var,
     data[[target_var]] == positive_class, 1L, 0L
   )
 
-  # Remove target and case weights from features
-  X <- data[, !colnames(data) %in% c(target_var, "case_weight"), drop = FALSE]
+  # Remove target from features. (Nota: a versão anterior também excluía
+  # uma coluna "case_weight" aqui, remanescente da abordagem de case
+  # weights via coluna de dados. Essa abordagem foi substituída por
+  # class_weights nativo por engine (ver .buildWorkflows()), que não
+  # anexa nenhuma coluna extra a `data` -- por isso a exclusão foi
+  # simplificada de volta a apenas target_var.)
+  X <- data[, !colnames(data) %in% c(target_var), drop = FALSE]
 
   purrr::imap(final_models, function(model_obj, model_name) {
     fitted_wf <- model_obj$model_fit
@@ -81,7 +92,6 @@ createExplainers <- function(final_models, data, target_var,
 #' @param shap_method Character. Method for SHAP calculation: \code{"exact"}
 #'   or \code{"fast"}.
 #' @param verbose Logical. Whether to print progress messages.
-#' @param model_weights Named numeric vector of model weights for consensus.
 #'
 #' @return A named list containing:
 #' \itemize{
@@ -89,7 +99,6 @@ createExplainers <- function(final_models, data, target_var,
 #'   \item \code{permutation_top}: Top features by permutation importance.
 #'   \item \code{shap_raw}: Raw SHAP values (unscaled).
 #'   \item \code{shap_top}: Top features by SHAP values per model.
-#'   \item \code{global_importance}: Consensus importance across models.
 #' }
 #'
 #' @importFrom DALEX model_parts predict_parts
@@ -99,7 +108,7 @@ createExplainers <- function(final_models, data, target_var,
 #' @importFrom future plan multisession sequential
 #' @importFrom purrr map_dfr imap
 #' @importFrom tidyr pivot_longer
-#' @importFrom stats cor median weighted.mean
+#' @importFrom stats cor median
 #' @export
 computeFeatureImportance <- function(explainers,
                                      data,
@@ -109,8 +118,7 @@ computeFeatureImportance <- function(explainers,
                                      repetitions = 10L,
                                      n_cores = 1L,
                                      shap_method = "exact",
-                                     verbose = TRUE,
-                                     model_weights = NULL) {
+                                     verbose = TRUE) {
 
   msg <- function(...) {
     if (verbose) message(...)
@@ -128,26 +136,68 @@ computeFeatureImportance <- function(explainers,
   msg("------------------------------------------------------")
 
   # --- PARALLEL SETUP ---
-  if (n_cores > 1) {
-    msg("Initializing parallel backend with ", n_cores, " cores...")
-    future::plan(future::multisession, workers = n_cores)
+  # O booster do XGBoost ('xgb.Booster') guarda seu estado como um ponteiro
+  # em C ('externalptr'), que NAO pode ser serializado para os processos
+  # worker do future/furrr (multisession). Isso ja causou um crash real em
+  # teste manual: o worker que recebeu o modelo XGB teve a conexao quebrada
+  # ('error writing to connection') e ficou como processo orfao, porque uma
+  # vez que a conexao quebra, nem future::plan("sequential") consegue
+  # encerra-lo de forma limpa -- o processo zumbi sobrevive e pode
+  # atrapalhar clusters paralelos abertos por chamadas seguintes de
+  # RUMBLE() (via .tuneModels()/parallel::makeCluster()). Por isso a
+  # estrategia aqui e' PREVENTIVA: desligar o multisession sempre que houver
+  # um explainer XGBoost entre os modelos, em vez de so tentar lidar com o
+  # erro depois que ele ja aconteceu.
+  has_xgb <- any(vapply(explainers, function(e) identical(e$label, "XGB"), logical(1)))
+  effective_n_cores <- n_cores
+  if (has_xgb && n_cores > 1) {
+    msg("XGBoost model detected: multisession parallelism is unsafe for ",
+        "this model (the booster handle cannot be serialized to worker ",
+        "processes). Falling back to n_cores = 1 for SHAP/permutation ",
+        "importance in this step only -- tuning/fitting parallelism ",
+        "elsewhere in the pipeline is unaffected.")
+    effective_n_cores <- 1L
+  }
+
+  if (effective_n_cores > 1) {
+    msg("Initializing parallel backend with ", effective_n_cores, " cores...")
+    future::plan(future::multisession, workers = effective_n_cores)
   } else {
     future::plan(future::sequential)
   }
+  # on.exit() garante que o plano volte a sequential mesmo se o calculo de
+  # SHAP/permutation importance abaixo lancar um erro. Complementa o
+  # on.exit() ja existente no topo de RUMBLE(): aquele reseta o plano da
+  # sessao ao final da chamada, mas nao encerra de forma limpa um worker
+  # cuja conexao ja quebrou -- por isso a prevencao acima (has_xgb) e' a
+  # defesa principal, e isto aqui e' uma segunda camada de seguranca.
+  on.exit(future::plan(future::sequential), add = TRUE)
 
   # --- MAPPER DEFINITION ---
+  # Fallback defensivo: se mesmo assim a execucao paralela falhar (por
+  # exemplo, por outro objeto nao-exportavel que nao seja o XGBoost ja
+  # tratado acima), reexecuta a etapa sequencialmente com um aviso, em vez
+  # de abortar o pipeline inteiro.
   run_map <- function(x, fn, seed = TRUE) {
-    if (n_cores > 1) {
-      furrr::future_map_dfr(x, fn,
-                            .options = furrr::furrr_options(seed = seed))
+    if (effective_n_cores > 1) {
+      tryCatch({
+        furrr::future_map_dfr(x, fn,
+                              .options = furrr::furrr_options(seed = seed))
+      }, error = function(e) {
+        warning(
+          "Parallel execution failed (", conditionMessage(e), "). ",
+          "Falling back to sequential execution for this step.",
+          call. = FALSE
+        )
+        purrr::map_dfr(x, fn)
+      })
     } else {
       purrr::map_dfr(x, fn)
     }
   }
 
   # --- PREPARE DATA ---
-  # --- PREPARE DATA ---
-  X_data <- data[, !colnames(data) %in% c(target_var, "case_weight"), drop = FALSE]
+  X_data <- data[, !colnames(data) %in% c(target_var), drop = FALSE]
   y_numeric <- ifelse(data[[target_var]] == class_of_interest, 1L, 0L)
 
   # --- 1. PERMUTATION IMPORTANCE ---
@@ -244,10 +294,8 @@ computeFeatureImportance <- function(explainers,
     })
   }
 
-  # --- CLEANUP ---
-  if (n_cores > 1) {
-    future::plan(future::sequential)
-  }
+  # Cleanup do backend paralelo agora e' feito via on.exit() no bloco de
+  # PARALLEL SETUP acima -- cobre tanto o caminho de sucesso quanto erro.
 
   # --- 3. AGGREGATE RESULTS ---
   msg("Aggregating results (raw SHAP values, no per-fold normalization)...")
@@ -289,23 +337,27 @@ computeFeatureImportance <- function(explainers,
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()
 
-  ## Global consensus (using RAW contributions with model weights)
-  if (is.null(model_weights)) {
-    model_weights <- stats::setNames(rep(1, length(explainers)), names(explainers))
-  }
-
-  shap_weighted <- shap %>%
-    dplyr::mutate(weight = model_weights[model])
-
-  global_importance <- shap_weighted %>%
-    dplyr::group_by(variable) %>%
-    dplyr::summarise(
-      mean_abs_contribution = stats::weighted.mean(abs(contribution), w = weight, na.rm = TRUE),
-      SHAP_Rho = .compute_direction_internal(feature_value, contribution),
-      n_models  = dplyr::n_distinct(model),
-      .groups   = "drop"
-    ) %>%
-    dplyr::arrange(dplyr::desc(mean_abs_contribution))
+      # ---------------------------------------------------------------
+    #%% CLR era aplicado ANTES do filtro de
+    #%% prevalência intra-fold. O geometric mean por amostra usado no CLR incluía taxa que
+    #%% seriam descartados logo em seguida pelo filtro.
+    #%%
+    #%% train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
+    #%% test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
+    #%% # ---------------------------------------------------------------
+    #%% # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
+    #%% # ---------------------------------------------------------------
+    #%% train_ids <- rownames(train_data)
+    #%% train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
+    #%% train_depths <- rowSums(train_counts)
+    #%% train_depths[train_depths == 0] <- 1
+    #%% train_rel <- sweep(train_counts, 1, train_depths, "/")
+    #%% prev_train <- colMeans(train_rel > min_abundance)
+    #%% valid_taxa <- names(prev_train)[prev_train >= min_prevalence]
+    #%% cols_to_keep <- c(valid_taxa, outcome_var)
+    #%% train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
+    #%% test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
+    # ---------------------------------------------------------------
 
   msg("Feature importance analysis complete.")
 
@@ -313,8 +365,7 @@ computeFeatureImportance <- function(explainers,
     permutation_raw = perm,
     permutation_top = top_perm,
     shap_raw = shap,
-    shap_top = list(spearman = top_shap),
-    global_importance = list(spearman = global_importance)
+    shap_top = list(spearman = top_shap)
   )
 }
 
@@ -327,18 +378,51 @@ computeFeatureImportance <- function(explainers,
 #'
 #' @param feature_value Numeric vector of feature values (abundances).
 #' @param contribution Numeric vector of SHAP contributions.
+#' @param weight Optional numeric vector of per-observation weights (e.g.,
+#'   the per-model MCC-derived consensus weight from Equation 5, recycled
+#'   across that model's rows). When \code{NULL} (default), an unweighted
+#'   Spearman correlation is returned -- unchanged behavior, correct for
+#'   per-model aggregates where weight is constant within the group. When
+#'   supplied, a weighted Spearman is computed as a weighted Pearson
+#'   correlation on the (unweighted) ranks of \code{feature_value} and
+#'   \code{contribution}, so that observations coming from higher-weight
+#'   (higher-MCC) models contribute proportionally more to the consensus
+#'   direction estimate -- consistent with \code{mean_abs_contribution},
+#'   which already uses \code{stats::weighted.mean(..., w = weight)} for
+#'   the magnitude metric in the same consensus step.
 #' @return A single numeric value (Spearman rho, ranging from -1 to 1).
 #'   Returns 0 if correlation cannot be computed (e.g., zero variance).
 #' @noRd
-.compute_direction_internal <- function(feature_value, contribution) {
+.compute_direction_internal <- function(feature_value, contribution, weight = NULL) {
   # Se a variável for constante (ex: 100% zeros no fold) a variância é 0
   if (length(unique(feature_value)) < 2 || length(unique(contribution)) < 2) {
     return(0)
   }
 
-  # Spearman captura a não-linearidade e lida bem com a cauda de zeros do CLR
-  rho <- suppressWarnings(stats::cor(feature_value, contribution, method = "spearman"))
+  if (is.null(weight)) {
+    # Spearman captura a não-linearidade e lida bem com a cauda de zeros do CLR
+    rho <- suppressWarnings(stats::cor(feature_value, contribution, method = "spearman"))
+    if (is.na(rho)) return(0)
+    return(rho)
+  }
 
+  # Spearman ponderado: ranks (não-ponderados) submetidos a uma correlação
+  # de Pearson ponderada -- convenção padrão para weighted Spearman.
+  rx <- rank(feature_value, ties.method = "average")
+  ry <- rank(contribution, ties.method = "average")
+
+  w <- weight
+  w_sum <- sum(w, na.rm = TRUE)
+  if (is.na(w_sum) || w_sum == 0) return(0)
+
+  mx <- sum(w * rx, na.rm = TRUE) / w_sum
+  my <- sum(w * ry, na.rm = TRUE) / w_sum
+
+  num <- sum(w * (rx - mx) * (ry - my), na.rm = TRUE)
+  den <- sqrt(sum(w * (rx - mx)^2, na.rm = TRUE) * sum(w * (ry - my)^2, na.rm = TRUE))
+
+  if (is.na(den) || den == 0) return(0)
+  rho <- num / den
   if (is.na(rho)) return(0)
   return(rho)
 }

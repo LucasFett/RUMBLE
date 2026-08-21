@@ -1,6 +1,7 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^vignettes/results$
+^vignettes/vignette_output$
 ^vignettes/.*_files$
 ^vignettes/.*\.png$
 ^RUMBLE\.BiocCheck$
@@ -9,7 +10,6 @@
 ^\.ipynb_checkpoints$
 ^tests/testthat/_snaps$
 ^vignettes/.*_cache$
-^vignettes/.*_files$
 ^vignettes/.*\.html$
 ^doc$
 ^Meta$

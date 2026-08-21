@@ -17,8 +17,7 @@
 #'   taxon must be present to be retained (default 0.05, i.e., 5 percent).
 #' @param min_abundance Numeric. Minimum relative abundance threshold to
 #'   consider a taxon as present in a sample (default 0.0001).
-#' @param pseudocount Numeric. Small value added before CLR transformation
-#'   to handle exact zeros (default 1e-6).
+
 #' @param remove_unclassified Logical. If \code{TRUE}, removes taxa whose
 #'   names match the pattern defined in \code{unclassified_patterns}.
 #'   Default is \code{FALSE}.
@@ -26,12 +25,7 @@
 #'   pattern used to identify unclassified or invalid taxa names. Only used
 #'   when \code{remove_unclassified = TRUE}. Default is
 #'   \code{"uncultured|unknown|unclassified"}.
-#' @param normalization_method Character. Method for compositional normalization.
-#'   Currently only \code{"clr"} (Centered Log-Ratio) is supported (default).
-#'   The CLR transformation is recommended for all machine learning
-#'   algorithms (Random Forest, XGBoost, KNN, ENET) as it preserves mathematical
-#'   monotonicity and ensures proper feature importance calculations via SHAP
-#'   values.
+
 #' @param verbose Logical. If \code{TRUE} (default), prints progress messages.
 #'
 #' @return A named list with five elements:
@@ -54,8 +48,15 @@
 #'   \item Sanitise taxa names with \code{make.names()} for ML compatibility.
 #'   \item Impute \code{NA} values with zero.
 #'   \item Convert to relative abundance and filter by prevalence.
-#'   \item Apply CLR transformation with a pseudocount.
 #' }
+#'
+#' \strong{Note:} this function does NOT apply CLR (or any other
+#' compositional transformation). CLR is applied later, independently
+#' inside each outer cross-validation fold (see \code{RUMBLE()}), using
+#' only the training partition of that fold, to avoid data leakage.
+#' \code{prepareData()} returns \code{filtered_counts}, the pre-CLR
+#' abundance table used both for that per-fold transformation and for
+#' differential abundance analysis.
 #'
 #' @importFrom methods is
 #' @importFrom phyloseq phyloseq otu_table sample_data tax_table
@@ -67,23 +68,15 @@ prepareData <- function(input,
                         tax_level = NULL,
                         min_prevalence = 0.05,
                         min_abundance = 0.0001,
-                        pseudocount = 1e-6,
                         remove_unclassified = FALSE,
                         unclassified_patterns = "uncultured|unknown|unclassified",
-                        normalization_method = "clr",
                         verbose = TRUE) {
 
   msg <- function(...) {
     if (verbose) message(...)
   }
 
-  ## ------------------------------------------------------------------
-  ## Validate normalization_method
-  ## ------------------------------------------------------------------
 
-  normalization_method <- match.arg(normalization_method,
-                                    c("clr"))
-  msg("Normalization method: ", normalization_method)
 
   ## ------------------------------------------------------------------
   ## 1. Normalise input to phyloseq
@@ -221,7 +214,7 @@ prepareData <- function(input,
 
 
   ## ------------------------------------------------------------------
-  ## 9. Build output
+  ## 7. Build output
   ## ------------------------------------------------------------------
   # Extraímos os features e metadados diretamente do ps_filtered
   features <- as.data.frame(phyloseq::otu_table(ps_filtered))

@@ -50,6 +50,7 @@ utils::globalVariables(c(
   "Prob_True_Class", "SD_Inner", "Spearman", "Spearman (Top N)",
   "True_Class", "abs_contribution", "feature_val_scaled", "fold",
   "importance", "is_top_quadrant", "mean_abs_shap_test", "mean_abs_shap_train",
+  "is_stable",
   "mean_estimate", "mean_tpr", "model_freq", "model_n_folds", "point_color",
   "sample_id", "scaled_abs_contribution", "sd_auc", "sd_estimate", "sd_tpr",
   "std_err", "tpr", "ymax", "ymin"

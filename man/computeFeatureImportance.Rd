@@ -13,8 +13,7 @@ computeFeatureImportance(
   repetitions = 10L,
   n_cores = 1L,
   shap_method = "exact",
-  verbose = TRUE,
-  model_weights = NULL
+  verbose = TRUE
 )
 }
 \arguments{
@@ -37,8 +36,6 @@ computeFeatureImportance(
 or \code{"fast"}.}
 
 \item{verbose}{Logical. Whether to print progress messages.}
-
-\item{model_weights}{Named numeric vector of model weights for consensus.}
 }
 \value{
 A named list containing:
@@ -47,7 +44,6 @@ A named list containing:
 \item \code{permutation_top}: Top features by permutation importance.
 \item \code{shap_raw}: Raw SHAP values (unscaled).
 \item \code{shap_top}: Top features by SHAP values per model.
-\item \code{global_importance}: Consensus importance across models.
 }
 }
 \description{
