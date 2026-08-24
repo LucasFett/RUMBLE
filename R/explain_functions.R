@@ -7,6 +7,7 @@
 #' @param data Training data.frame (features + target).
 #' @param target_var Name of the target variable.
 #' @param class_of_interest Character. The class of interest for SHAP values.
+#' @param verbose Logical. Whether to print progress messages (default TRUE).
 #'
 #' @return A list of DALEX explainer objects, one for each model.
 #'
@@ -15,14 +16,15 @@
 #' @importFrom stats predict
 #' @export
 createExplainers <- function(final_models, data, target_var,
-                             class_of_interest) {
-  message("Creating DALEX explainers...")
+                             class_of_interest, verbose = TRUE) {
+  if (verbose) message("Creating DALEX explainers...")
 
-  # Nota: Se o paralelismo for ativado na etapa de computacao de importancia
-  # (via furrr/future), modelos XGBoost podem causar erro de serializacao
-  # (externalptr nao pode ser passado para workers multisession sem serializacao
-  # explicita). Se isso ocorrer, considere usar future::plan(sequential) apenas
-  # nesta etapa, ou serializar o modelo XGB via xgb.save.raw()/xgb.load.raw().
+  # Note: If parallelism is enabled at the importance-computation step
+  # (via furrr/future), XGBoost models can trigger a serialization error
+  # (an externalptr cannot be passed to multisession workers without
+  # explicit serialization). If this happens, consider using
+  # future::plan(sequential) for this step only, or serializing the XGB
+  # model via xgb.save.raw()/xgb.load.raw().
 
   # Validate class_of_interest
   if (missing(class_of_interest)) {
@@ -44,12 +46,12 @@ createExplainers <- function(final_models, data, target_var,
     data[[target_var]] == positive_class, 1L, 0L
   )
 
-  # Remove target from features. (Nota: a versão anterior também excluía
-  # uma coluna "case_weight" aqui, remanescente da abordagem de case
-  # weights via coluna de dados. Essa abordagem foi substituída por
-  # class_weights nativo por engine (ver .buildWorkflows()), que não
-  # anexa nenhuma coluna extra a `data` -- por isso a exclusão foi
-  # simplificada de volta a apenas target_var.)
+  # Remove target from features. (Note: the previous version also
+  # excluded a "case_weight" column here, a remnant of the
+  # case-weights-via-data-column approach. That approach was replaced by
+  # native per-engine class_weights (see .buildWorkflows()), which does
+  # not attach any extra column to `data` -- so the exclusion was
+  # simplified back to just target_var.)
   X <- data[, !colnames(data) %in% c(target_var), drop = FALSE]
 
   purrr::imap(final_models, function(model_obj, model_name) {
@@ -136,48 +138,61 @@ computeFeatureImportance <- function(explainers,
   msg("------------------------------------------------------")
 
   # --- PARALLEL SETUP ---
-  # O booster do XGBoost ('xgb.Booster') guarda seu estado como um ponteiro
-  # em C ('externalptr'), que NAO pode ser serializado para os processos
-  # worker do future/furrr (multisession). Isso ja causou um crash real em
-  # teste manual: o worker que recebeu o modelo XGB teve a conexao quebrada
-  # ('error writing to connection') e ficou como processo orfao, porque uma
-  # vez que a conexao quebra, nem future::plan("sequential") consegue
-  # encerra-lo de forma limpa -- o processo zumbi sobrevive e pode
-  # atrapalhar clusters paralelos abertos por chamadas seguintes de
-  # RUMBLE() (via .tuneModels()/parallel::makeCluster()). Por isso a
-  # estrategia aqui e' PREVENTIVA: desligar o multisession sempre que houver
-  # um explainer XGBoost entre os modelos, em vez de so tentar lidar com o
-  # erro depois que ele ja aconteceu.
-  has_xgb <- any(vapply(explainers, function(e) identical(e$label, "XGB"), logical(1)))
-  effective_n_cores <- n_cores
-  if (has_xgb && n_cores > 1) {
-    msg("XGBoost model detected: multisession parallelism is unsafe for ",
-        "this model (the booster handle cannot be serialized to worker ",
-        "processes). Falling back to n_cores = 1 for SHAP/permutation ",
-        "importance in this step only -- tuning/fitting parallelism ",
-        "elsewhere in the pipeline is unaffected.")
-    effective_n_cores <- 1L
-  }
+  # The XGBoost booster ('xgb.Booster') holds its state as a C pointer
+  # ('externalptr'), which CANNOT be serialized to future/furrr
+  # (multisession) worker processes. This has already caused a real crash
+  # during manual testing: the worker that received the XGB model had its
+  # connection broken ('error writing to connection') and became an
+  # orphan process, because once the connection breaks, not even
+  # future::plan("sequential") can shut it down cleanly -- the zombie
+  # process survives and can interfere with parallel clusters opened by
+  # later RUMBLE() calls (via .tuneModels()/parallel::makeCluster()).
+  #
+  # Rather than disabling multisession for the ENTIRE model set whenever
+  # an XGBoost explainer is present (the previous, coarser strategy),
+  # explainers are split into an "xgb" group (always processed
+  # sequentially, never touching the future/furrr backend) and an
+  # "other" group (RF/ENET/KNN, eligible for multisession when
+  # n_cores > 1). This keeps the preventive guarantee for XGBoost while
+  # no longer forcing RF/ENET/KNN into single-core execution just
+  # because XGBoost happens to be in the same model pool.
+  is_xgb <- vapply(explainers, function(e) identical(e$label, "XGB"), logical(1))
+  xgb_explainers   <- explainers[is_xgb]
+  other_explainers <- explainers[!is_xgb]
+
+  effective_n_cores <- if (length(other_explainers) > 0) n_cores else 1L
 
   if (effective_n_cores > 1) {
-    msg("Initializing parallel backend with ", effective_n_cores, " cores...")
+    msg("Initializing parallel backend with ", effective_n_cores, " cores for ",
+        length(other_explainers), " non-XGBoost model(s)...")
     future::plan(future::multisession, workers = effective_n_cores)
   } else {
     future::plan(future::sequential)
   }
-  # on.exit() garante que o plano volte a sequential mesmo se o calculo de
-  # SHAP/permutation importance abaixo lancar um erro. Complementa o
-  # on.exit() ja existente no topo de RUMBLE(): aquele reseta o plano da
-  # sessao ao final da chamada, mas nao encerra de forma limpa um worker
-  # cuja conexao ja quebrou -- por isso a prevencao acima (has_xgb) e' a
-  # defesa principal, e isto aqui e' uma segunda camada de seguranca.
+  if (length(xgb_explainers) > 0) {
+    msg(length(xgb_explainers), " XGBoost model(s) detected: the booster's ",
+        "externalptr cannot be serialized to multisession workers, so ",
+        "XGBoost is always processed sequentially, isolated from the ",
+        "parallel backend above (RF/ENET/KNN above remain eligible for ",
+        "multisession when n_cores > 1) -- tuning/fitting parallelism ",
+        "elsewhere in the pipeline is unaffected.")
+  }
+  # on.exit() ensures the plan reverts to sequential even if the
+  # SHAP/permutation importance computation below throws an error. This
+  # complements the on.exit() already present at the top of RUMBLE():
+  # that one resets the session's plan at the end of the call, but it
+  # does not cleanly shut down a worker whose connection has already
+  # broken -- which is why routing XGBoost around the multisession
+  # backend entirely (above) is the primary defense, and this is a
+  # second layer of safety.
   on.exit(future::plan(future::sequential), add = TRUE)
 
-  # --- MAPPER DEFINITION ---
-  # Fallback defensivo: se mesmo assim a execucao paralela falhar (por
-  # exemplo, por outro objeto nao-exportavel que nao seja o XGBoost ja
-  # tratado acima), reexecuta a etapa sequencialmente com um aviso, em vez
-  # de abortar o pipeline inteiro.
+  # --- MAPPER DEFINITIONS ---
+  # run_map(): used only for the "other" (non-XGBoost) group. Defensive
+  # fallback: if parallel execution still fails (for example, due to
+  # some other non-exportable object besides the XGBoost case already
+  # routed around above), re-run the step sequentially with a warning,
+  # instead of aborting the entire pipeline.
   run_map <- function(x, fn, seed = TRUE) {
     if (effective_n_cores > 1) {
       tryCatch({
@@ -195,6 +210,10 @@ computeFeatureImportance <- function(explainers,
       purrr::map_dfr(x, fn)
     }
   }
+  # run_map_seq(): used only for the XGBoost group -- always plain
+  # purrr::map_dfr(), never touches future/furrr, regardless of
+  # effective_n_cores (which may be > 1 because of the "other" group).
+  run_map_seq <- function(x, fn, seed = TRUE) purrr::map_dfr(x, fn)
 
   # --- PREPARE DATA ---
   X_data <- data[, !colnames(data) %in% c(target_var), drop = FALSE]
@@ -203,7 +222,7 @@ computeFeatureImportance <- function(explainers,
   # --- 1. PERMUTATION IMPORTANCE ---
   msg("Computing permutation importance...")
 
-  perm <- run_map(explainers, function(exp) {
+  compute_perm_for_model <- function(exp) {
     parts <- DALEX::model_parts(
       exp,
       data = X_data,
@@ -213,7 +232,19 @@ computeFeatureImportance <- function(explainers,
     )
     parts$model <- exp$label
     parts
-  })
+  }
+
+  perm_other <- if (length(other_explainers) > 0) {
+    run_map(other_explainers, compute_perm_for_model)
+  } else {
+    data.frame()
+  }
+  perm_xgb <- if (length(xgb_explainers) > 0) {
+    run_map_seq(xgb_explainers, compute_perm_for_model)
+  } else {
+    data.frame()
+  }
+  perm <- dplyr::bind_rows(perm_other, perm_xgb)
 
 
 
@@ -221,10 +252,10 @@ computeFeatureImportance <- function(explainers,
   if (shap_method == "exact") {
     msg("Computing SHAP values for all observations (EXACT method)...")
 
-    shap <- purrr::map_dfr(explainers, function(exp) {
+    compute_shap_for_model <- function(exp, mapper) {
       msg(paste0("  -> Extracting SHAP for model: ", exp$label))
 
-      run_map(seq_len(nrow(X_data)), function(i) {
+      mapper(seq_len(nrow(X_data)), function(i) {
         single_obs <- X_data[i, , drop = FALSE]
 
         shap_val <- DALEX::predict_parts(
@@ -240,7 +271,23 @@ computeFeatureImportance <- function(explainers,
 
         return(shap_val)
       })
-    })
+    }
+
+    # Same split as the permutation step above: the per-observation loop
+    # for non-XGBoost models may use the multisession backend (run_map);
+    # XGBoost's per-observation loop always uses run_map_seq(), never
+    # touching future/furrr, regardless of effective_n_cores.
+    shap_other <- if (length(other_explainers) > 0) {
+      purrr::map_dfr(other_explainers, function(exp) compute_shap_for_model(exp, run_map))
+    } else {
+      data.frame()
+    }
+    shap_xgb <- if (length(xgb_explainers) > 0) {
+      purrr::map_dfr(xgb_explainers, function(exp) compute_shap_for_model(exp, run_map_seq))
+    } else {
+      data.frame()
+    }
+    shap <- dplyr::bind_rows(shap_other, shap_xgb)
 
     # Clean variable names
     shap$variable <- sub(" =.*", "", as.character(shap$variable))
@@ -265,8 +312,8 @@ computeFeatureImportance <- function(explainers,
 
       shap_vals <- fastshap::explain(
         object = fitted_model,
-        X = exp$data,         # O background (Conjunto de Treino salvo pelo DALEX)
-        newdata = X_pred,     # A amostra atual que estamos explicando (Teste ou Treino)
+        X = exp$data,         # The background (training set saved by DALEX)
+        newdata = X_pred,     # The current sample being explained (test or train)
         pred_wrapper = pred_fn,
         nsim = repetitions
       )
@@ -294,8 +341,8 @@ computeFeatureImportance <- function(explainers,
     })
   }
 
-  # Cleanup do backend paralelo agora e' feito via on.exit() no bloco de
-  # PARALLEL SETUP acima -- cobre tanto o caminho de sucesso quanto erro.
+  # Parallel backend cleanup is now handled via on.exit() in the PARALLEL
+  # SETUP block above -- it covers both the success and error paths.
 
   # --- 3. AGGREGATE RESULTS ---
   msg("Aggregating results (raw SHAP values, no per-fold normalization)...")
@@ -337,27 +384,6 @@ computeFeatureImportance <- function(explainers,
     dplyr::slice_head(n = top_n) %>%
     dplyr::ungroup()
 
-      # ---------------------------------------------------------------
-    #%% CLR era aplicado ANTES do filtro de
-    #%% prevalência intra-fold. O geometric mean por amostra usado no CLR incluía taxa que
-    #%% seriam descartados logo em seguida pelo filtro.
-    #%%
-    #%% train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
-    #%% test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
-    #%% # ---------------------------------------------------------------
-    #%% # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
-    #%% # ---------------------------------------------------------------
-    #%% train_ids <- rownames(train_data)
-    #%% train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
-    #%% train_depths <- rowSums(train_counts)
-    #%% train_depths[train_depths == 0] <- 1
-    #%% train_rel <- sweep(train_counts, 1, train_depths, "/")
-    #%% prev_train <- colMeans(train_rel > min_abundance)
-    #%% valid_taxa <- names(prev_train)[prev_train >= min_prevalence]
-    #%% cols_to_keep <- c(valid_taxa, outcome_var)
-    #%% train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
-    #%% test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
-    # ---------------------------------------------------------------
 
   msg("Feature importance analysis complete.")
 
@@ -394,20 +420,20 @@ computeFeatureImportance <- function(explainers,
 #'   Returns 0 if correlation cannot be computed (e.g., zero variance).
 #' @noRd
 .compute_direction_internal <- function(feature_value, contribution, weight = NULL) {
-  # Se a variável for constante (ex: 100% zeros no fold) a variância é 0
+  # If the variable is constant (e.g., 100% zeros in the fold), the variance is 0
   if (length(unique(feature_value)) < 2 || length(unique(contribution)) < 2) {
     return(0)
   }
 
   if (is.null(weight)) {
-    # Spearman captura a não-linearidade e lida bem com a cauda de zeros do CLR
+    # Spearman captures non-linearity and handles the CLR's zero-tail well
     rho <- suppressWarnings(stats::cor(feature_value, contribution, method = "spearman"))
     if (is.na(rho)) return(0)
     return(rho)
   }
 
-  # Spearman ponderado: ranks (não-ponderados) submetidos a uma correlação
-  # de Pearson ponderada -- convenção padrão para weighted Spearman.
+  # Weighted Spearman: (unweighted) ranks submitted to a weighted Pearson
+  # correlation -- standard convention for weighted Spearman.
   rx <- rank(feature_value, ties.method = "average")
   ry <- rank(contribution, ties.method = "average")
 

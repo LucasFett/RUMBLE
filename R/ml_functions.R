@@ -85,11 +85,11 @@ NULL
 
   class_balance_method <- match.arg(class_balance_method)
 
-  # Criar a fórmula com todos os preditores. Ao contrário da abordagem
-  # anterior baseada em case weights, "class_weights" não precisa de
-  # nenhuma coluna extra nem de update_role() aqui -- os pesos por classe
-  # são passados diretamente aos engines (ranger/xgboost) em
-  # .buildWorkflows(), então a recipe permanece igual em todos os modos.
+  # Build the formula with all predictors. Unlike the previous
+  # case-weights-based approach, "class_weights" does not need any extra
+  # column or update_role() here -- the per-class weights are passed
+  # directly to the engines (ranger/xgboost) in .buildWorkflows(), so the
+  # recipe stays the same across all modes.
   rec <- recipes::recipe(
     stats::as.formula(paste(target_var, "~ .")),
     data = train_data
@@ -103,9 +103,9 @@ NULL
     rec <- rec %>%
       themis::step_downsample(!!rlang::sym(target_var), seed = seed)
   }
-  # "class_weights": nada a fazer na recipe; os pesos por classe são
-  # aplicados diretamente nos model spec's engine args, em .buildWorkflows().
-  # "none": nada a fazer.
+  # "class_weights": nothing to do in the recipe; the per-class weights
+  # are applied directly in the model spec's engine args, in .buildWorkflows().
+  # "none": nothing to do.
 
   if (!is.null(correlation_threshold)) {
     rec <- rec %>%

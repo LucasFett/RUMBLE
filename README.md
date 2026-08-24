@@ -1,6 +1,6 @@
 # RUMBLE
 
-## Robust Unified Microbiome Biomarker Learning Engine
+## Reproducible Understanding of Microbiome Biomarkers with Leakage-free Explainability
 
 **RUMBLE** is an R package for microbiome biomarker discovery designed around **predictive robustness**, **model-agnostic interpretability**, and **analytical reproducibility**. The package integrates multiple supervised classification algorithms within the **tidymodels** ecosystem, applies compositional-data-aware preprocessing, and returns a structured set of outputs suitable for both exploratory analysis and formal technical review.
 
@@ -297,7 +297,7 @@ It is also advisable not to interpret the consensus output as sufficient biologi
 
 If you use RUMBLE in your research, please cite:
 
-> Fett, L. (2026). *RUMBLE: Robust Unified Microbiome Biomarker Learning Engine*. R package version 0.99.0.
+> Fett, L. (2026). *RUMBLE: Reproducible Understanding of Microbiome Biomarkers with Leakage-free Explainability*. R package version 0.99.0.
 
 ---
 

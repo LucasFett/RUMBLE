@@ -61,6 +61,13 @@
 #'   taxa filtering (default 0.05).
 #' @param min_abundance Numeric. Minimum relative abundance to
 #'   consider a taxon present (default 0.0001).
+#' @param pseudocount Numeric. Pseudocount added to exact zeros before the
+#'   Centered Log-Ratio (CLR) transformation (default 1e-6). Re-exposed as a
+#'   top-level parameter after having been hardcoded at the three
+#'   \code{.apply_clr()} call sites inside the pipeline; see
+#'   \code{vignette("RUMBLE_tutorial")} or the manuscript's Section 2.1.1 for
+#'   the rationale behind the default value and its numerical effect on the
+#'   separation between structural zeros and rare biological signal.
 #' @param min_fold_frequency Numeric. Minimum fraction of outer folds in which
 #'   a feature must appear in the top-N to be included in the consensus ranking
 #'   (default 0.7, i.e., 70 percent of folds). This filters out unstable
@@ -158,6 +165,7 @@ RUMBLE <- function(input,
                    rf_trees = 500L,
                    min_prevalence = 0.05,
                    min_abundance = 0.0001,
+                   pseudocount = 1e-6,
                    min_fold_frequency = 0.7,
                    remove_unclassified = FALSE,
                    unclassified_patterns = "uncultured|unknown|unclassified",
@@ -179,9 +187,9 @@ RUMBLE <- function(input,
   ## 0. EARLY VALIDATION & CLEANUP
   ## ==================================================================
 
-  # Garantir que workers paralelos sejam limpos ao sair da função,
-  # mesmo em caso de erro. Isso evita que workers zumbis fiquem pendurados
-  # entre chamadas de RUMBLE(), o que pode causar travamentos.
+  # Ensure parallel workers are cleaned up on exit, even in case of
+  # error. This prevents zombie workers from lingering between RUMBLE()
+  # calls, which can cause hangs.
   on.exit(future::plan("sequential"), add = TRUE)
 
   # Validate da_method parameter
@@ -349,35 +357,13 @@ RUMBLE <- function(input,
     msg("  Train: ", nrow(train_data), " | Test: ", nrow(test_data))
 
     # ---------------------------------------------------------------
-    #%% [ORIGINAL -- pré-commit1] CLR era aplicado ANTES do filtro de
-    #%% prevalência intra-fold, violando o que a Seção 2.1.1 do manuscrito
-    #%% promete. O geometric mean por amostra usado no CLR incluía taxa que
-    #%% seriam descartados logo em seguida pelo filtro.
-    #%%
-    #%% train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
-    #%% test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
-    #%% # ---------------------------------------------------------------
-    #%% # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
-    #%% # ---------------------------------------------------------------
-    #%% train_ids <- rownames(train_data)
-    #%% train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
-    #%% train_depths <- rowSums(train_counts)
-    #%% train_depths[train_depths == 0] <- 1
-    #%% train_rel <- sweep(train_counts, 1, train_depths, "/")
-    #%% prev_train <- colMeans(train_rel > min_abundance)
-    #%% valid_taxa <- names(prev_train)[prev_train >= min_prevalence]
-    #%% cols_to_keep <- c(valid_taxa, outcome_var)
-    #%% train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
-    #%% test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
-    # ---------------------------------------------------------------
-
-    #%% [ORIGINAL -- pré-commit1] CLR era aplicado ANTES do filtro de
-    #%% prevalência intra-fold, violando o que a Seção 2.1.1 do manuscrito
-    #%% promete. O geometric mean por amostra usado no CLR incluía taxa que
-    #%% seriam descartados logo em seguida pelo filtro.
+    #%% [ORIGINAL -- pre-commit1] CLR was applied BEFORE the intra-fold
+    #%% prevalence filter, violating what Section 2.1.1 of the manuscript
+    #%% promises. The per-sample geometric mean used in the CLR included
+    #%% taxa that would be discarded immediately afterward by the filter.
     #%%
     #%% # ---------------------------------------------------------------
-    #%% # SEPARAÇÃO ESTRITA: CLR aplicado intra-fold para evitar críticas de Data Leakage
+    #%% # STRICT SEPARATION: CLR applied intra-fold to avoid Data Leakage criticism
     #%% # ---------------------------------------------------------------
     #%% train_data <- .apply_clr(train_data, outcome_var, pseudocount = 1e-6)
     #%% test_data  <- .apply_clr(test_data, outcome_var, pseudocount = 1e-6)
@@ -394,15 +380,14 @@ RUMBLE <- function(input,
     #%% cols_to_keep <- c(valid_taxa, outcome_var)
     #%% train_data_filtered <- train_data[, colnames(train_data) %in% cols_to_keep, drop = FALSE]
     #%% test_data_filtered  <- test_data[, colnames(test_data) %in% cols_to_keep, drop = FALSE]
-
     # ---------------------------------------------------------------
     # STRICT ANTI-LEAKAGE FILTER: Dynamic Prevalence based on Train only
-    # Executado ANTES do CLR (correção pós-submissão): a Seção 2.1.1 do
-    # manuscrito promete que o CLR opera apenas sobre os taxa que
-    # sobrevivem ao filtro de prevalência intra-fold. Antes desta correção,
-    # o CLR era calculado sobre a tabela completa (pré-filtro), fazendo o
-    # log-geometric-mean por amostra incluir taxa que seriam descartados
-    # a seguir -- inconsistente com o texto e com o desenho anti-leakage.
+    # Executed BEFORE the CLR (post-submission fix): Section 2.1.1 of the
+    # manuscript promises that the CLR operates only on taxa that survive
+    # the intra-fold prevalence filter. Before this fix, the CLR was
+    # computed on the full (pre-filter) table, causing the per-sample
+    # log-geometric-mean to include taxa that would be discarded next --
+    # inconsistent with both the text and the anti-leakage design.
     # ---------------------------------------------------------------
     train_ids <- rownames(train_data)
     train_counts <- filtered_counts[rownames(filtered_counts) %in% train_ids, , drop = FALSE]
@@ -426,25 +411,26 @@ RUMBLE <- function(input,
     # ---------------------------------------------------------------
 
     # ---------------------------------------------------------------
-    # SEPARAÇÃO ESTRITA: CLR aplicado intra-fold, agora SOMENTE sobre os
-    # taxa que sobreviveram ao filtro de prevalência acima. O treino define
-    # os taxa retidos (train_data_filtered); o mesmo conjunto de colunas é
-    # aplicado ao teste (test_data_filtered) antes do CLR, garantindo que
-    # ambos os conjuntos tenham o mesmo espaço composicional.
+    # STRICT SEPARATION: CLR applied intra-fold, now ONLY on the taxa that
+    # survived the prevalence filter above. The training set defines the
+    # retained taxa (train_data_filtered); the same set of columns is
+    # applied to the test set (test_data_filtered) before the CLR,
+    # ensuring both sets share the same compositional space.
     # ---------------------------------------------------------------
-    train_data_filtered <- .apply_clr(train_data_filtered, outcome_var, pseudocount = 1e-6)
-    test_data_filtered  <- .apply_clr(test_data_filtered, outcome_var, pseudocount = 1e-6)
+    train_data_filtered <- .apply_clr(train_data_filtered, outcome_var, pseudocount = pseudocount)
+    test_data_filtered  <- .apply_clr(test_data_filtered, outcome_var, pseudocount = pseudocount)
     # ---------------------------------------------------------------
 
     # ---------------------------------------------------------------
-    # CLASS BALANCE: calcula pesos nativos por classe SE
-    # class_balance_method == "class_weights". Mantido após o filtro de
-    # prevalência e o CLR, pois depende apenas da coluna outcome_var em
-    # train_data_filtered (já filtrado), não dos valores CLR-transformados
-    # das colunas de taxa. Ao contrario da abordagem anterior (case weights
-    # via coluna + workflows::add_case_weights), aqui nao se anexa nenhuma
-    # coluna extra a train_data_filtered -- os pesos sao passados
-    # diretamente aos engines em .buildWorkflows().
+    # CLASS BALANCE: computes native per-class weights IF
+    # class_balance_method == "class_weights". Kept after the prevalence
+    # filter and the CLR, since it only depends on the outcome_var column
+    # in train_data_filtered (already filtered), not on the
+    # CLR-transformed values of the taxa columns. Unlike the previous
+    # approach (case weights via an extra column +
+    # workflows::add_case_weights), here no extra column is attached to
+    # train_data_filtered -- the weights are passed directly to the
+    # engines in .buildWorkflows().
     # ---------------------------------------------------------------
     class_weights_rf <- NULL
     scale_pos_weight_xgb <- NULL
@@ -452,14 +438,16 @@ RUMBLE <- function(input,
       y <- train_data_filtered[[outcome_var]]
       tab <- table(y)
 
-      # RF (ranger::class.weights): peso inverso a frequencia da classe,
-      # nomeado pelos levels do fator (equivalente a class_weight="balanced").
+      # RF (ranger::class.weights): weight inversely proportional to class
+      # frequency, named by the factor levels (equivalent to
+      # class_weight = "balanced").
       w <- length(y) / (length(tab) * tab)
       class_weights_rf <- stats::setNames(as.numeric(w), names(tab))
 
-      # XGB (xgboost::scale_pos_weight): razao negativos/positivos, na
-      # definicao padrao do proprio xgboost. A classe positiva e' sempre o
-      # segundo level do fator outcome (ver class_of_interest/RUMBLE()).
+      # XGB (xgboost::scale_pos_weight): negative/positive ratio, per
+      # xgboost's own default definition. The positive class is always
+      # the second level of the outcome factor (see
+      # class_of_interest/RUMBLE()).
       negative_class <- levels(y)[1]
       positive_class <- levels(y)[2]
       scale_pos_weight_xgb <- as.numeric(tab[[negative_class]] / tab[[positive_class]])
@@ -595,12 +583,13 @@ RUMBLE <- function(input,
   ## ==================================================================
   ## 5. Interpretability (SHAP)
   ## ==================================================================
-  # Substitua o bloco antigo de "compute_train" e "compute_test" por:
+  # The pipeline always computes SHAP on both the training and test sets:
   compute_train <- TRUE
   compute_test  <- TRUE
 
-  # E na parte de consolidação, force a união:
-  # O pipeline sempre comparará as assinaturas SHAP para o relatório de overfitting.
+  # Consolidation below therefore always builds the union of both sets --
+  # the pipeline compares train vs. test SHAP signatures to build the
+  # overfitting report.
 
   msg("[5/5] Computing feature importance (SHAP)...")
 
@@ -614,16 +603,18 @@ RUMBLE <- function(input,
     # Explainers created on Training data
     explainers <- createExplainers(
       explainable_models, res$train_data, outcome_var,
-      class_of_interest = class_of_interest
+      class_of_interest = class_of_interest,
+      verbose = verbose
     )
 
-    #%% [ORIGINAL -- pré-commit1] model_weights por-fold removido: usava
-    #%% bal_accuracy/roc_auc do fold atual (não MCC agregado dos outer
-    #%% folds), sem o w_min documentado na Equação 5, e alimentava apenas
-    #%% o global_importance morto de computeFeatureImportance() -- nunca
-    #%% chegava às tabelas de consenso reportadas no artigo. O único
-    #%% mecanismo de ponderação por performance agora é global_weights
-    #%% (Seção 5.5 abaixo), que implementa fielmente a Equação 5.
+    #%% [ORIGINAL -- pre-commit1] Per-fold model_weights removed: it used
+    #%% the current fold's bal_accuracy/roc_auc (not the MCC aggregated
+    #%% across outer folds), without the w_min documented in Equation 5,
+    #%% and it only fed the dead global_importance field of
+    #%% computeFeatureImportance() -- it never reached the consensus
+    #%% tables reported in the manuscript. The only performance-weighting
+    #%% mechanism now is global_weights (Section 5.5 below), which
+    #%% faithfully implements Equation 5.
     #%%
     #%% model_weights <- purrr::map_dbl(explainable_models, function(mod) {
     #%%   metrics_df <- mod$metrics
@@ -639,7 +630,7 @@ RUMBLE <- function(input,
     imp_train <- NULL
     imp_test <- NULL
 
-    # SHAP on Training set (conditional)
+    # SHAP on Training set
     msg("    - Computing SHAP on Train set...")
     imp_train <- computeFeatureImportance(
       explainers, res$train_data, outcome_var,
@@ -767,36 +758,75 @@ RUMBLE <- function(input,
     msg("  Features passing min_fold_frequency (", min_fold_frequency * 100, "%): ",
         length(stable_features), " / ", nrow(feature_frequency))
 
+    # ---------------------------------------------------------------
+    # min_fold_frequency is defined over model x fold evaluations (see
+    # calculateFeatureFrequency()), not over outer_folds alone: with M
+    # models admitted by metric_cutoffs and outer_folds folds, the only
+    # frequencies a feature can actually take are multiples of
+    # 1 / (M * outer_folds). A requested min_fold_frequency that is not
+    # one of those multiples is silently rounded down in effect (a feature
+    # needs ceiling(min_fold_frequency * M * outer_folds) evaluations to
+    # pass). This generalizes the fix requested for the specific case of
+    # outer_folds = 3, where 0.7 was mistakenly read as "70% of folds"
+    # instead of "70% of model x fold evaluations".
+    #
+    # Gated behind apply_stability_filter: min_fold_frequency only
+    # affects the reported results when the filter is actually enabled
+    # (see the analogous isTRUE(apply_stability_filter) gate further
+    # below, where the filter is applied to primary_global_importance).
+    # With apply_stability_filter = FALSE (the default), min_fold_frequency
+    # is not used to prune anything, so warning about its reachability
+    # unconditionally would print noise for the common case of users who
+    # never touch the stability filter at all.
+    # ---------------------------------------------------------------
+    if (isTRUE(apply_stability_filter) &&
+        nrow(feature_frequency) > 0 && "total_possible_evaluations" %in% colnames(feature_frequency)) {
+      total_evals <- feature_frequency$total_possible_evaluations[1]
+      if (total_evals > 0) {
+        step <- 1 / total_evals
+        nearest_reachable <- floor((min_fold_frequency + 1e-9) / step) * step
+        if (abs(nearest_reachable - min_fold_frequency) > 1e-9) {
+          msg("  NOTE: min_fold_frequency = ", min_fold_frequency,
+              " is not an exact multiple of 1/", total_evals,
+              " (", total_evals, " model x fold evaluations in this run). ",
+              "The nearest reachable threshold at or below the requested value is ",
+              round(nearest_reachable, 4), " (i.e., a feature must appear in at least ",
+              ceiling(min_fold_frequency * total_evals), " of ", total_evals,
+              " model x fold evaluations to pass).")
+        }
+      }
+    }
+
     # -------------------------------------------------------------------------
     # B.2 CONSENSUS FROM TEST (Gold Standard)
     # -------------------------------------------------------------------------
     if (compute_test && nrow(all_shap_raw_test) > 0) {
 
-      # Passo 1: Normalização Intra-Modelo
+      # Step 1: Intra-Model Normalization
       all_shap_weighted_test <- all_shap_raw_test %>%
         dplyr::group_by(model) %>%
         dplyr::mutate(
           abs_contribution = abs(contribution),
-          # Min-Max Scaling (coloca os SHAPs absolutos de todos os modelos na escala de 0 a 1)
+          # Min-Max Scaling (rescales the absolute SHAP values of all models onto a common 0-1 scale)
           scaled_abs_contribution = (abs_contribution - min(abs_contribution, na.rm = TRUE)) /
             (max(abs_contribution, na.rm = TRUE) - min(abs_contribution, na.rm = TRUE) + 1e-9),
           weight = global_weights[model]
         ) %>%
         dplyr::ungroup()
 
-      # Passo 2: Consenso Ponderado Inter-Modelos
+      # Step 2: Weighted Inter-Model Consensus
       global_importance_spearman_aggregated_test <- all_shap_weighted_test %>%
         dplyr::group_by(variable) %>%
         dplyr::summarise(
-          # Usa a variável escalonada aqui!
+          # Uses the scaled variable here!
           mean_abs_contribution = stats::weighted.mean(scaled_abs_contribution, w = weight, na.rm = TRUE),
-          #%% [ORIGINAL -- pré-commit1] SHAP_Rho = .compute_direction_internal(feature_value, contribution),
-          #%% Não-ponderado: a métrica de direção ignorava o peso MCC que
-          #%% já ponderava a magnitude ao lado (linha acima), quebrando a
-          #%% Equação 5 do manuscrito, que define um único esquema de
-          #%% ponderação por MCC aplicado ao consenso.
-          # Calcula a direção on-the-fly com os vetores originais, agora
-          # ponderada pelo mesmo `weight` (MCC-based, Eq. 5) usado na magnitude
+          #%% [ORIGINAL -- pre-commit1] SHAP_Rho = .compute_direction_internal(feature_value, contribution),
+          #%% Unweighted: the direction metric ignored the MCC weight that
+          #%% already weighted the magnitude alongside it (line above),
+          #%% breaking Equation 5 of the manuscript, which defines a
+          #%% single MCC-based weighting scheme applied to the consensus.
+          # Computes direction on-the-fly from the original vectors, now
+          # weighted by the same `weight` (MCC-based, Eq. 5) used for the magnitude
           SHAP_Rho = .compute_direction_internal(feature_value, contribution, weight = weight),
           n_models  = dplyr::n_distinct(model),
           n_folds   = dplyr::n_distinct(fold),
@@ -817,7 +847,7 @@ RUMBLE <- function(input,
     # -------------------------------------------------------------------------
     if (compute_train && nrow(all_shap_raw_train) > 0) {
 
-      # Passo 1: Normalização Intra-Modelo replicada para o Treino
+      # Step 1: Intra-Model Normalization, replicated for the Training set
       all_shap_weighted_train <- all_shap_raw_train %>%
         dplyr::group_by(model) %>%
         dplyr::mutate(
@@ -828,16 +858,16 @@ RUMBLE <- function(input,
         ) %>%
         dplyr::ungroup()
 
-      # Passo 2: Consenso Ponderado Inter-Modelos para o Treino
+      # Step 2: Weighted Inter-Model Consensus for the Training set
       global_importance_spearman_aggregated_train <- all_shap_weighted_train %>%
         dplyr::group_by(variable) %>%
         dplyr::summarise(
-          # Usa a variável escalonada aqui também!
+          # Uses the scaled variable here as well!
           mean_abs_contribution = stats::weighted.mean(scaled_abs_contribution, w = weight, na.rm = TRUE),
-          #%% [ORIGINAL -- pré-commit1] SHAP_Rho = .compute_direction_internal(feature_value, contribution),
-          #%% Mesma correção do bloco de teste acima: direção agora
-          #%% ponderada pelo `weight` MCC-based (Eq. 5), consistente com
-          #%% a magnitude na linha anterior.
+          #%% [ORIGINAL -- pre-commit1] SHAP_Rho = .compute_direction_internal(feature_value, contribution),
+          #%% Same fix as the test block above: direction is now weighted
+          #%% by the MCC-based `weight` (Eq. 5), consistent with the
+          #%% magnitude on the previous line.
           SHAP_Rho = .compute_direction_internal(feature_value, contribution, weight = weight),
           n_models  = dplyr::n_distinct(model),
           n_folds   = dplyr::n_distinct(fold),
@@ -862,12 +892,12 @@ RUMBLE <- function(input,
       permutation_top = if (compute_test) {
         purrr::map_dfr(fold_importances, ~ .x$test$permutation_top) %>%
           dplyr::group_by(model, variable) %>%
-          # 1. Calcula a média do delta loss bruto entre os folds
+          # 1. Computes the mean raw delta loss across folds
           dplyr::summarize(mean_delta_loss = mean(mean_delta_loss, na.rm = TRUE), .groups = "drop") %>%
-          # 2. Agrupa por modelo para aplicar o Min-Max Scaling
+          # 2. Groups by model to apply Min-Max Scaling
           dplyr::group_by(model) %>%
           dplyr::mutate(
-            # Normaliza a escala (0 a 1) para garantir equidade na comparação inter-modelos
+            # Normalizes the scale (0 to 1) to ensure a fair inter-model comparison
             mean_delta_loss = (mean_delta_loss - min(mean_delta_loss, na.rm = TRUE)) /
               (max(mean_delta_loss, na.rm = TRUE) - min(mean_delta_loss, na.rm = TRUE) + 1e-9)
           ) %>%
@@ -920,11 +950,11 @@ RUMBLE <- function(input,
       obj <- res$tuned[[name]]
       if (is.null(obj) || !inherits(obj$tuning_results, "tune_results")) return(NULL)
 
-      # 1. Isola o ID da configuração que efetivamente venceu o tuning
+      # 1. Isolates the ID of the configuration that actually won the tuning
       best_config_id <- obj$best_params$.config[1]
 
       tune::collect_metrics(obj$tuning_results) %>%
-        # 2. FILTRO ESTRITO: Pega apenas as métricas atreladas aos hiperparâmetros campeões
+        # 2. STRICT FILTER: keeps only the metrics tied to the winning hyperparameters
         dplyr::filter(.config == best_config_id) %>%
         dplyr::select(.metric, mean, std_err) %>%
         dplyr::rename(Metric = .metric, CV_Mean = mean, CV_StdErr = std_err) %>%
@@ -945,7 +975,7 @@ RUMBLE <- function(input,
   hyperparameter_stability <- .summarizeHyperparameterStability(best_hyperparameters)
 
   ## ==================================================================
-  ## Geração de Gráficos e Tabelas
+  ## Plot and Table Generation
   ## ==================================================================
   msg("Generating plots based on consolidated out-of-fold data...")
 
@@ -997,6 +1027,7 @@ RUMBLE <- function(input,
   model_specific_plots <- list(
     shap_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
     shap_beeswarm = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
+    shap_dependence = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot),
     biomarker_integrated_spearman = setNames(vector("list", length(shap_models_to_plot)), shap_models_to_plot)
   )
 
@@ -1011,6 +1042,9 @@ RUMBLE <- function(input,
         primary_shap, prediction_data = NULL, target_var = outcome_var,
         top_n = top_n, model = model_name
       )
+      model_specific_plots$shap_dependence[[model_name]] <- plotShapDependence(
+        primary_shap, top_n = top_n, model = model_name
+      )
       model_specific_plots$biomarker_integrated_spearman[[model_name]] <- plotBiomarkerIntegrated(
         filtered_counts = plot_filtered_counts, metadata = plot_metadata,
         global_importance = importance$shap_top$spearman, target_var = outcome_var,
@@ -1022,7 +1056,7 @@ RUMBLE <- function(input,
 
   # Build main plots list
   plots <- list(
-    metrics   = plotMetricsComparison(final_models_consolidated),
+    metrics   = plotMetricsComparison(final_models_consolidated, fold_metrics = all_metrics),
     roc       = plotRocCurves(final_models_consolidated, outcome_var),
     cm        = plotConfusionMatrices(final_models_consolidated, outcome_var),
     oof_density = plotOOFDensity(final_models_consolidated, outcome_var),
@@ -1037,6 +1071,9 @@ RUMBLE <- function(input,
       plotShapBeeswarm(
         primary_shap, prediction_data = NULL, target_var = outcome_var, top_n = top_n
       )
+    } else { NULL },
+    shap_dependence = if (nrow(primary_shap) > 0) {
+      plotShapDependence(primary_shap, top_n = top_n)
     } else { NULL },
     shap_prevalence = if (nrow(primary_global_importance) > 0) {
       plotTaxaPrevalence(
@@ -1070,14 +1107,15 @@ RUMBLE <- function(input,
     msg("Saving outputs to: ", output_dir)
 
     plot_names <- c("metrics", "roc", "cm", "oof_density",
-                    "shap_spearman", "shap_beeswarm",
+                    "shap_spearman", "shap_beeswarm", "shap_dependence",
                     "shap_prevalence", "biomarker_integrated_spearman",
                     "shap_vs_permutation")
 
     plot_sizes <- list(
       metrics = c(8, 5), roc = c(8, 5), cm = c(10, 8),
       oof_density = c(10, 6), shap_spearman = c(9, 8),
-      shap_beeswarm = c(10, 8), shap_prevalence = c(9, 8),
+      shap_beeswarm = c(10, 8), shap_dependence = c(12, 10),
+      shap_prevalence = c(9, 8),
       biomarker_integrated_spearman = c(12, 9),
       shap_vs_permutation = c(9, 7)
     )
@@ -1096,17 +1134,22 @@ RUMBLE <- function(input,
       for (model_name in shap_models_to_plot) {
         model_slug <- gsub("[^A-Za-z0-9]+", "_", model_name)
 
-        # 1. Salva o SHAP Global de barras do modelo
+        # 1. Saves the model's global SHAP bar plot
         if (!is.null(plots$model_specific$shap_spearman[[model_name]])) {
           ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_shap_spearman.png"), plot = plots$model_specific$shap_spearman[[model_name]], width = 9, height = 8, dpi = 300)
         }
 
-        # 2. Salva o Beeswarm do modelo
+        # 2. Saves the model's beeswarm plot
         if (!is.null(plots$model_specific$shap_beeswarm[[model_name]])) {
           ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_shap_beeswarm.png"), plot = plots$model_specific$shap_beeswarm[[model_name]], width = 10, height = 8, dpi = 300)
         }
 
-        # 3. CORREÇÃO: Salva o Dashboard Biomarker Integrated do modelo
+        # 3. Saves the model's SHAP dependence plot
+        if (!is.null(plots$model_specific$shap_dependence[[model_name]])) {
+          ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_shap_dependence.png"), plot = plots$model_specific$shap_dependence[[model_name]], width = 12, height = 10, dpi = 300)
+        }
+
+        # 4. FIX: saves the model's Integrated Biomarker Dashboard
         if (!is.null(plots$model_specific$biomarker_integrated_spearman[[model_name]])) {
           ggplot2::ggsave(filename = paste0(prefix, "_", model_slug, "_biomarker_integrated_spearman.png"), plot = plots$model_specific$biomarker_integrated_spearman[[model_name]], width = 12, height = 9, dpi = 300)
         }
@@ -1117,7 +1160,7 @@ RUMBLE <- function(input,
     # TSV EXPORTS
     # =========================================================================
 
-    # 1. Predições OOF (Out-of-Fold) em nível de amostra
+    # 1. Sample-level Out-of-Fold (OOF) predictions
     msg("Exporting Out-of-Fold predictions...")
     oof_preds <- purrr::imap_dfr(final_models_consolidated, function(mod_data, model_name) {
       df <- mod_data$predictions
@@ -1125,12 +1168,12 @@ RUMBLE <- function(input,
       return(df)
     })
 
-    # Reorganizando as colunas para ficar elegante e legível
+    # Reordering columns for a cleaner, more readable layout
     oof_preds <- oof_preds %>%
       dplyr::select(sample_id, fold, model, !!rlang::sym(outcome_var), .pred_class, dplyr::starts_with(".pred_"))
 
     readr::write_tsv(oof_preds, paste0(prefix, "_oof_predictions.tsv"))
-    # --- NOVO BLOCO: DIAGNÓSTICO PREDITIVO AUTOMATIZADO ---
+    # --- NEW BLOCK: AUTOMATED PREDICTIVE DIAGNOSTICS ---
     oof_diagnostics <- analyzeOOFPredictions(oof_preds, outcome_var)
     if (!is.null(oof_diagnostics)) {
       readr::write_tsv(oof_diagnostics$confidence, paste0(prefix, "_oof_confidence_summary.tsv"))
@@ -1144,7 +1187,7 @@ RUMBLE <- function(input,
     readr::write_tsv(cv_metrics_summary, paste0(prefix, "_cv_metrics.tsv"))
     readr::write_tsv(all_metrics, paste0(prefix, "_model_metrics_per_fold.tsv"))
 
-    # Exportação Tabular Unificada: SHAP vs Permutação
+    # Unified Tabular Export: SHAP vs. Permutation
     if (nrow(primary_global_importance) > 0 && nrow(importance$permutation_top) > 0) {
       shap_vs_perm_df <- dplyr::inner_join(
         primary_global_importance %>% dplyr::rename(shap_importance = mean_abs_contribution),
@@ -1182,7 +1225,7 @@ RUMBLE <- function(input,
     if (nrow(all_shap_raw_train) > 0) {
       readr::write_tsv(all_shap_raw_train, paste0(prefix, "_shap_raw_TRAIN.tsv"))
     }
-    # --- NOVO BLOCO: ESTABILIDADE DE MAGNITUDE SHAP (ETAPA 4) ---
+    # --- NEW BLOCK: SHAP MAGNITUDE STABILITY (STEP 4) ---
     if (nrow(all_shap_raw_train) > 0 && nrow(all_shap_raw_test) > 0) {
       shap_magnitude_stab <- evaluateShapMagnitudeStability(
         shap_raw_train = all_shap_raw_train,
@@ -1215,28 +1258,28 @@ RUMBLE <- function(input,
         dplyr::filter(Taxon %in% integrated_table_consensus$Taxon)
       readr::write_tsv(top_da_results, paste0(prefix, "_top_differential_abundance.tsv"))
 
-      # Tabela completa de DA (Suplementar obrigatório para submissão)
+      # Full DA table (mandatory supplementary file for submission)
       readr::write_tsv(da_results, paste0(prefix, "_full_differential_abundance.tsv"))
     }
 
-    # 7. Matrizes de Dados Limpas e Alinhadas (Data Availability / Reprodutibilidade)
+    # 7. Cleaned and Aligned Data Matrices (Data Availability / Reproducibility)
     msg("Exporting cleaned data matrices (Data Availability)...")
 
-    # 7.1 Matriz de abundância filtrada (Raw/Relative)
+    # 7.1 Filtered abundance matrix (Raw/Relative)
     readr::write_tsv(plot_filtered_counts %>% tibble::rownames_to_column("sample_id"),
                      paste0(prefix, "_filtered_counts.tsv"))
 
-    # 7.2 Metadados finais alinhados (sem as amostras que continham NA no desfecho)
+    # 7.2 Final aligned metadata (excluding samples that had NA in the outcome)
     readr::write_tsv(plot_metadata %>% tibble::rownames_to_column("sample_id"),
                      paste0(prefix, "_aligned_metadata.tsv"))
 
-    # 7.3 Matriz global CLR (computada sem leak para uso em PCoA, PERMANOVA ou redes no Python)
-    global_clr <- .apply_clr(analysis_df, outcome_var, pseudocount = 1e-6) %>%
+    # 7.3 Global CLR matrix (computed without leakage, for use in PCoA, PERMANOVA, or network analyses in Python)
+    global_clr <- .apply_clr(analysis_df, outcome_var, pseudocount = pseudocount) %>%
       dplyr::select(-!!rlang::sym(outcome_var)) %>%
       tibble::rownames_to_column("sample_id")
     readr::write_tsv(global_clr, paste0(prefix, "_global_clr_features.tsv"))
 
-    # Processar as tabelas formatadas de publicação
+    # Build the publication-formatted tables
     outer_summary <- summarizeOuterCV(all_metrics)
     inner_summary <- summarizeInnerCV(cv_metrics_summary)
 
@@ -1248,7 +1291,7 @@ RUMBLE <- function(input,
     if (!is.null(inner_summary)) {
       readr::write_tsv(inner_summary$publication_table, paste0(prefix, "_publication_inner_cv_consistency.tsv"))
     }
-    # --- NOVO BLOCO: THE GENERALIZATION GAP ---
+    # --- NEW BLOCK: THE GENERALIZATION GAP ---
     if (!is.null(outer_summary) && !is.null(inner_summary)) {
       gap_summary <- evaluateGeneralizationGap(
         outer_raw = outer_summary$raw_stats,
@@ -1259,7 +1302,7 @@ RUMBLE <- function(input,
         readr::write_tsv(gap_summary, paste0(prefix, "_publication_generalization_gap.tsv"))
       }
     }
-    # --- NOVO BLOCO: SHAP RANK STABILITY (Top N) ---
+    # --- NEW BLOCK: SHAP RANK STABILITY (Top N) ---
     if (nrow(all_shap_raw_train) > 0 && nrow(all_shap_raw_test) > 0) {
       shap_rank_stab <- evaluateShapRankStability(
         shap_raw_train = all_shap_raw_train,
@@ -1272,7 +1315,7 @@ RUMBLE <- function(input,
     }
     # ------------------------------------------------------------
     # -----------------------------------------------------------
-    # --- NOVO BLOCO: CORE CONSENSUS BIOMARKERS (ETAPA 5) ---
+    # --- NEW BLOCK: CORE CONSENSUS BIOMARKERS (STEP 5) ---
     if (!is.null(importance$shap_top$spearman) && nrow(importance$shap_top$spearman) > 0) {
       core_consensus_res <- extractCoreConsensus(importance$shap_top$spearman, top_n = top_n)
 
@@ -1285,10 +1328,10 @@ RUMBLE <- function(input,
     }
     # ------------------------------------------------------------
 
-    # 8. Objetos dos Modelos Treinados e Estruturas R (Serialização)
+    # 8. Trained Model Objects and R Structures (Serialization)
     msg("Serializing trained models and objects to RDS...")
 
-    # 8.1 Salva os outputs consolidados (predições OOF, métricas resumidas e os gráficos gerados)
+    # 8.1 Saves the consolidated outputs (OOF predictions, summary metrics, and generated plots)
     pipeline_outputs <- list(
       models = final_models_consolidated,
       metrics = metrics_summary,
@@ -1297,7 +1340,7 @@ RUMBLE <- function(input,
     )
     saveRDS(pipeline_outputs, paste0(prefix, "_pipeline_outputs.rds"))
 
-    # 8.2 Salva o objeto com os modelos reais ajustados por fold (essencial para inferência/validação externa)
+    # 8.2 Saves the object holding the actual fitted models per fold (essential for inference/external validation)
     saveRDS(fold_results, paste0(prefix, "_trained_fold_models.rds"))
 
     msg("All outputs saved.")
@@ -1307,7 +1350,7 @@ RUMBLE <- function(input,
   msg("RUMBLE Pipeline complete (Nested CV Mode).")
   msg("======================================================")
 
-  # Retorno final da função RUMBLE
+  # Final return value of the RUMBLE function
   list(
     models              = final_models_consolidated,
     metrics             = metrics_summary,
@@ -1331,7 +1374,7 @@ RUMBLE <- function(input,
 ## Internal Helper Functions
 ## ==================================================================
 
-# REMOVIDO: .compute_direction (substituído por .compute_direction_internal em explain_functions.R)
+# REMOVED: .compute_direction (replaced by .compute_direction_internal in explain_functions.R)
 
 
 #' Calculate SHAP Consistency Across Folds

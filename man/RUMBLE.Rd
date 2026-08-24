@@ -23,6 +23,7 @@ RUMBLE(
   rf_trees = 500L,
   min_prevalence = 0.05,
   min_abundance = 1e-04,
+  pseudocount = 1e-06,
   min_fold_frequency = 0.7,
   remove_unclassified = FALSE,
   unclassified_patterns = "uncultured|unknown|unclassified",
@@ -97,6 +98,14 @@ taxa filtering (default 0.05).}
 
 \item{min_abundance}{Numeric. Minimum relative abundance to
 consider a taxon present (default 0.0001).}
+
+\item{pseudocount}{Numeric. Pseudocount added to exact zeros before the
+Centered Log-Ratio (CLR) transformation (default 1e-6). Re-exposed as a
+top-level parameter after having been hardcoded at the three
+\code{.apply_clr()} call sites inside the pipeline; see
+\code{vignette("RUMBLE_tutorial")} or the manuscript's Section 2.1.1 for
+the rationale behind the default value and its numerical effect on the
+separation between structural zeros and rare biological signal.}
 
 \item{min_fold_frequency}{Numeric. Minimum fraction of outer folds in which
 a feature must appear in the top-N to be included in the consensus ranking

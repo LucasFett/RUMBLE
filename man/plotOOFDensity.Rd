@@ -16,6 +16,9 @@ A \code{ggplot} object faceted by model.
 }
 \description{
 Displays the distribution of predicted probabilities from the held-out
-test folds, separated by true class. This reveals calibration issues and
-class separability that aggregate metrics cannot capture.
+test folds, separated by true class. This reveals class separability
+(discriminative power) that aggregate metrics cannot capture; it does
+not assess probability calibration (the agreement between predicted
+probabilities and observed frequencies), which this function does not
+compute.
 }

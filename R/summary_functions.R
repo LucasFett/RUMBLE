@@ -18,7 +18,7 @@ calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L, min_f
   n_models <- length(models_present)
   total_evaluations <- as.numeric(n_models * n_folds)
 
-  # 1. Extrai o Top N individualmente para CADA modelo dentro de CADA fold
+  # 1. Extracts the Top N individually for EACH model within EACH fold
   model_fold_tops <- shap_raw %>%
     dplyr::group_by(model, fold, variable) %>%
     dplyr::summarize(imp = mean(abs(contribution), na.rm = TRUE), .groups = "drop") %>%
@@ -26,7 +26,7 @@ calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L, min_f
     dplyr::slice_max(order_by = imp, n = top_n, with_ties = FALSE) %>%
     dplyr::ungroup()
 
-  # 2. Frequência Global (Contagem Democrática)
+  # 2. Global Frequency (Democratic Count)
   freq_global <- model_fold_tops %>%
     dplyr::group_by(variable) %>%
     dplyr::summarize(
@@ -38,7 +38,7 @@ calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L, min_f
       fold_frequency = as.numeric(n_folds_present) / total_evaluations
     )
 
-  # 3. Frequência Específica por Modelo
+  # 3. Per-Model Specific Frequency
   freq_model_wide <- model_fold_tops %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(
@@ -53,7 +53,7 @@ calculateFeatureFrequency <- function(shap_raw, top_n = 20L, n_folds = 5L, min_f
       names_glue = "{model}_{.value}"
     )
 
-  # 4. Join Final (Consenso + Por Modelo)
+  # 4. Final Join (Consensus + Per Model)
   result <- freq_global %>%
     dplyr::full_join(freq_model_wide, by = "variable") %>%
     dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~tidyr::replace_na(., 0))) %>%
@@ -75,7 +75,7 @@ summarizeOuterCV <- function(metrics_per_fold, metrics_to_report = c("roc_auc", 
 
   if (is.null(metrics_per_fold) || nrow(metrics_per_fold) == 0) return(NULL)
 
-  # 1. Cálculos Base
+  # 1. Base Calculations
   stats_df <- metrics_per_fold %>%
     dplyr::select(model, .metric, fold, .estimate) %>%
     tidyr::pivot_wider(names_from = fold, values_from = .estimate, names_prefix = "Fold_") %>%
@@ -89,12 +89,12 @@ summarizeOuterCV <- function(metrics_per_fold, metrics_to_report = c("roc_auc", 
     dplyr::ungroup() %>%
     dplyr::arrange(.metric, model)
 
-  # 2. Formatação para Publicação
+  # 2. Formatting for Publication
   final_table <- stats_df %>%
     dplyr::filter(.metric %in% metrics_to_report) %>%
     dplyr::mutate(
       Formatted_Value = sprintf("%.3f \u00B1 %.3f", Mean, SD),
-      Discrepancy_Max_Min = round(Discrepancy_Max_Min, 3), # Mantém como NUMERIC
+      Discrepancy_Max_Min = round(Discrepancy_Max_Min, 3), # Keeps it as NUMERIC
       Model = dplyr::case_when(
         model == "RF" ~ "Random Forest (RF)",
         model == "XGB" ~ "XGBoost (XGB)",
@@ -110,7 +110,7 @@ summarizeOuterCV <- function(metrics_per_fold, metrics_to_report = c("roc_auc", 
       names_glue = "{.name} ({.value})"
     )
 
-  # 3. Limpeza dos Nomes das Colunas
+  # 3. Column Name Cleanup
   colnames_to_fix <- colnames(final_table)
   colnames_to_fix <- gsub("Formatted_Value", "Outer CV Mean \u00B1 SD", colnames_to_fix)
   colnames_to_fix <- gsub("Discrepancy_Max_Min", "Max Discrepancy", colnames_to_fix)
@@ -118,7 +118,7 @@ summarizeOuterCV <- function(metrics_per_fold, metrics_to_report = c("roc_auc", 
   colnames(final_table) <- toupper(colnames_to_fix)
   colnames(final_table)[1] <- "Model"
 
-  # Ordenação
+  # Ordering
   auc_col <- grep("ROC AUC \\(OUTER CV MEAN", colnames(final_table), value = TRUE)
   if (length(auc_col) > 0) {
     final_table <- final_table %>% dplyr::arrange(dplyr::desc(!!rlang::sym(auc_col[1])))
@@ -139,11 +139,11 @@ summarizeInnerCV <- function(cv_metrics, metrics_to_report = c("roc_auc", "mcc")
 
   if (is.null(cv_metrics) || nrow(cv_metrics) == 0) return(NULL)
 
-  # Como cv_metrics agora já vem filtrado da origem (run_analysis.R),
-  # basta selecionar os valores diretamente sem aplicar o max()
+  # Since cv_metrics now arrives already filtered at the source
+  # (run_analysis.R), we can select the values directly without applying max()
   best_inner <- cv_metrics %>%
     dplyr::select(Model, Fold, Metric, Best_CV_Mean = CV_Mean) %>%
-    dplyr::distinct() # Segurança extra para evitar linhas duplicadas acidentais
+    dplyr::distinct() # Extra safeguard against accidental duplicate rows
 
   stats_inner <- best_inner %>%
     tidyr::pivot_wider(names_from = Fold, values_from = Best_CV_Mean, names_prefix = "Inner_Fold_") %>%
@@ -161,7 +161,7 @@ summarizeInnerCV <- function(cv_metrics, metrics_to_report = c("roc_auc", "mcc")
     dplyr::filter(Metric %in% metrics_to_report) %>%
     dplyr::mutate(
       Formatted_Value = sprintf("%.3f \u00B1 %.3f", Mean_Inner, SD_Inner),
-      Discrepancy_Max_Min = round(Discrepancy_Max_Min, 3), # Mantém como NUMERIC
+      Discrepancy_Max_Min = round(Discrepancy_Max_Min, 3), # Keeps it as NUMERIC
       Model = dplyr::case_when(
         Model == "RF" ~ "Random Forest (RF)",
         Model == "XGB" ~ "XGBoost (XGB)",
@@ -205,11 +205,11 @@ summarizeInnerCV <- function(cv_metrics, metrics_to_report = c("roc_auc", "mcc")
 analyzeOOFPredictions <- function(oof_preds, target_var) {
   if (is.null(oof_preds) || nrow(oof_preds) == 0) return(NULL)
 
-  # Garante que a coluna de verdade é texto para facilitar o pareamento com as colunas .pred_
+  # Ensures the truth column is text, to make matching against the .pred_ columns easier
   truth_vec <- as.character(oof_preds[[target_var]])
 
-  # 1. Análise de Confiança Média
-  # Extraímos dinamicamente a probabilidade atribuída à classe REAL daquela amostra
+  # 1. Mean Confidence Analysis
+  # Dynamically extracts the probability assigned to the TRUE class of that sample
   probs <- vapply(seq_len(nrow(oof_preds)), function(i) {
     class_name <- truth_vec[i]
     prob_col <- paste0(".pred_", class_name)
@@ -219,7 +219,7 @@ analyzeOOFPredictions <- function(oof_preds, target_var) {
     } else {
       return(NA_real_)
     }
-  }, numeric(1L)) # <-- Aqui está a diferença: declaramos que o retorno é numérico
+  }, numeric(1L)) # <-- This is the key part: we declare the return type as numeric
 
   conf_df <- oof_preds %>%
     dplyr::mutate(
@@ -237,8 +237,8 @@ analyzeOOFPredictions <- function(oof_preds, target_var) {
     ) %>%
     dplyr::arrange(model, dplyr::desc(Is_Correct))
 
-  # 2. Identificação de Amostras Difíceis (Hard Samples)
-  # Avalia as amostras em relação a todos os modelos que estão no OOF preds
+  # 2. Identification of Hard Samples
+  # Evaluates samples against all models present in the OOF preds
   hard_samples <- conf_df %>%
     dplyr::group_by(sample_id) %>%
     dplyr::summarize(
@@ -247,7 +247,7 @@ analyzeOOFPredictions <- function(oof_preds, target_var) {
       Models_Failed = paste(model[!Is_Correct], collapse = ", "),
       .groups = "drop"
     ) %>%
-    dplyr::filter(Accuracy_Rate == 0) %>% # Falhou em 100% dos modelos disponíveis
+    dplyr::filter(Accuracy_Rate == 0) %>% # Failed in 100% of the available models
     dplyr::select(sample_id, True_Class, Models_Failed) %>%
     dplyr::arrange(True_Class)
 
@@ -274,7 +274,7 @@ evaluateShapMagnitudeStability <- function(shap_raw_train, shap_raw_test, top_n 
     return(NULL)
   }
 
-  # 1. Calcular a importância média (módulo do SHAP) por feature/modelo em ambas as fases
+  # 1. Compute the mean importance (absolute SHAP) per feature/model in both phases
   imp_train <- shap_raw_train %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(mean_abs_shap_train = mean(abs(contribution), na.rm = TRUE), .groups = "drop")
@@ -283,11 +283,11 @@ evaluateShapMagnitudeStability <- function(shap_raw_train, shap_raw_test, top_n 
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(mean_abs_shap_test = mean(abs(contribution), na.rm = TRUE), .groups = "drop")
 
-  # 2. Juntar os dados para calcular a variação
+  # 2. Join the data to compute the change
   magnitude_drop <- imp_train %>%
     dplyr::inner_join(imp_test, by = c("model", "variable"))
 
-  # 3. Resumo global focado apenas nas Top N features do TREINO
+  # 3. Global summary focused only on the Top N features from TRAINING
   resumo_magnitude <- magnitude_drop %>%
     dplyr::group_by(model) %>%
     dplyr::slice_max(order_by = mean_abs_shap_train, n = top_n, with_ties = FALSE) %>%
@@ -297,10 +297,10 @@ evaluateShapMagnitudeStability <- function(shap_raw_train, shap_raw_test, top_n 
       .groups = "drop"
     ) %>%
     dplyr::mutate(
-      # Variação percentual: (Final - Inicial) / Inicial * 100
+      # Percentage change: (Final - Initial) / Initial * 100
       Magnitude_Change_Pct = ((Mean_SHAP_Test - Mean_SHAP_Train) / Mean_SHAP_Train) * 100
     ) %>%
-    # Usando round() para manter formato NUMERIC puro (Evita bugs em softwares de planilhas)
+    # Using round() to keep a pure NUMERIC format (avoids bugs in spreadsheet software)
     dplyr::mutate(
       Mean_SHAP_Train = round(Mean_SHAP_Train, 5),
       Mean_SHAP_Test = round(Mean_SHAP_Test, 5),
@@ -313,14 +313,14 @@ evaluateShapMagnitudeStability <- function(shap_raw_train, shap_raw_test, top_n 
         TRUE ~ model
       )
     ) %>%
-    # Organizando colunas para a tabela final
+    # Arranging columns for the final table
     dplyr::select(
       Model,
       `Mean SHAP (Train Top N)` = Mean_SHAP_Train,
       `Mean SHAP (Test)` = Mean_SHAP_Test,
       `Magnitude Change (%)` = Magnitude_Change_Pct
     ) %>%
-    # Ordena para colocar os modelos que preservaram melhor o sinal (ou tiveram menor queda) no topo
+    # Sorts to place the models that best preserved the signal (or had the smallest drop) at the top
     dplyr::arrange(dplyr::desc(`Magnitude Change (%)`))
 
   return(resumo_magnitude)
@@ -340,17 +340,17 @@ extractCoreConsensus <- function(shap_top, top_n = 20L) {
     return(NULL)
   }
 
-  # 1. Garante a extração limpa das Top N features por modelo
+  # 1. Ensures a clean extraction of the Top N features per model
   top_features <- shap_top %>%
     dplyr::group_by(model) %>%
-    # Usamos mean_abs_contribution, que é a coluna padronizada gerada pelo pacote
+    # Uses mean_abs_contribution, the standardized column generated by the package
     dplyr::slice_max(order_by = mean_abs_contribution, n = top_n, with_ties = FALSE) %>%
     dplyr::ungroup()
 
-  # 2. Separa as features em uma lista onde cada elemento é o Top N de um modelo
+  # 2. Splits the features into a list where each element is one model's Top N
   taxa_per_model <- split(top_features$variable, top_features$model)
 
-  # Se apenas 1 modelo sobreviveu ao cutoff, o consenso é o próprio Top N dele
+  # If only 1 model survived the cutoff, the consensus is simply its own Top N
   if (length(taxa_per_model) == 1) {
     return(list(
       core_consensus = data.frame(Taxon = taxa_per_model[[1]], stringsAsFactors = FALSE),
@@ -358,10 +358,10 @@ extractCoreConsensus <- function(shap_top, top_n = 20L) {
     ))
   }
 
-  # 3. Calcula a interseção estrita (Core Consensus) entre TODOS os modelos
+  # 3. Computes the strict intersection (Core Consensus) across ALL models
   core_taxa <- Reduce(intersect, taxa_per_model)
 
-  # 4. Retorna um data.frame limpo
+  # 4. Returns a clean data.frame
   return(list(
     core_consensus = data.frame(Taxon = core_taxa, stringsAsFactors = FALSE),
     n_models = length(taxa_per_model),
@@ -386,24 +386,24 @@ evaluateGeneralizationGap <- function(outer_raw, inner_raw, metrics_to_report = 
     return(NULL)
   }
 
-  # 1. Padronizar e extrair as médias do Outer CV (Teste)
+  # 1. Standardize and extract the Outer CV (Test) means
   outer_clean <- outer_raw %>%
     dplyr::select(Model = model, Metric = .metric, Mean_Outer = Mean)
 
-  # 2. Padronizar e extrair as médias do Inner CV (Treino/Validação)
+  # 2. Standardize and extract the Inner CV (Train/Validation) means
   inner_clean <- inner_raw %>%
     dplyr::select(Model, Metric, Mean_Inner)
 
-  # 3. Juntar e calcular o Gap (Inner - Outer)
+  # 3. Join and compute the Gap (Inner - Outer)
   gap_df <- inner_clean %>%
     dplyr::inner_join(outer_clean, by = c("Model", "Metric")) %>%
     dplyr::filter(Metric %in% metrics_to_report) %>%
     dplyr::mutate(
-      # Delta > 0 significa que perdeu performance no teste (Overfitting)
-      # Delta < 0 significa que performou melhor no teste (Underfitting ou Variância de Sample)
+      # Delta > 0 means performance was lost on the test set (Overfitting)
+      # Delta < 0 means performance was better on the test set (Underfitting or Sample Variance)
       Generalization_Gap = Mean_Inner - Mean_Outer,
 
-      # Garantir formato puramente numérico com 3 casas decimais
+      # Ensure a purely numeric format with 3 decimal places
       Mean_Inner = round(Mean_Inner, 3),
       Mean_Outer = round(Mean_Outer, 3),
       Generalization_Gap = round(Generalization_Gap, 3),
@@ -418,7 +418,7 @@ evaluateGeneralizationGap <- function(outer_raw, inner_raw, metrics_to_report = 
     ) %>%
     dplyr::arrange(Metric, dplyr::desc(Generalization_Gap))
 
-  # 4. Pivotar para Tabela de Publicação
+  # 4. Pivot into the Publication Table
   final_table <- gap_df %>%
     tidyr::pivot_wider(
       names_from = Metric,
@@ -426,7 +426,7 @@ evaluateGeneralizationGap <- function(outer_raw, inner_raw, metrics_to_report = 
       names_glue = "{.name} ({.value})"
     )
 
-  # 5. Limpeza dos Nomes das Colunas
+  # 5. Column Name Cleanup
   colnames_to_fix <- colnames(final_table)
   colnames_to_fix <- gsub("Mean_Inner", "Inner CV Mean", colnames_to_fix)
   colnames_to_fix <- gsub("Mean_Outer", "Outer CV Mean", colnames_to_fix)
@@ -435,7 +435,7 @@ evaluateGeneralizationGap <- function(outer_raw, inner_raw, metrics_to_report = 
   colnames(final_table) <- toupper(colnames_to_fix)
   colnames(final_table)[1] <- "Model"
 
-  # Ordenar de forma decrescente pelo Gap na ROC AUC (mostrar o pior overfitting no topo)
+  # Sort in descending order by the ROC AUC Gap (show the worst overfitting at the top)
   auc_col <- grep("ROC AUC \\(GAP", colnames(final_table), value = TRUE)
   if (length(auc_col) > 0) {
     final_table <- final_table %>% dplyr::arrange(dplyr::desc(!!rlang::sym(auc_col[1])))
@@ -462,20 +462,20 @@ evaluateShapRankStability <- function(shap_raw_train, shap_raw_test, top_n = 20L
     return(NULL)
   }
 
-  # 1. Calcular importância média no Treino
+  # 1. Compute mean importance on the training set
   imp_train <- shap_raw_train %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(mean_abs_shap_train = mean(abs(contribution), na.rm = TRUE), .groups = "drop")
 
-  # 2. Calcular importância média no Teste
+  # 2. Compute mean importance on the test set
   imp_test <- shap_raw_test %>%
     dplyr::group_by(model, variable) %>%
     dplyr::summarize(mean_abs_shap_test = mean(abs(contribution), na.rm = TRUE), .groups = "drop")
 
-  # 3. Filtrar o Top N baseado no Treino, juntar com o Teste e calcular correlações
+  # 3. Filter the Top N based on training, join with test, and compute correlations
   rank_stability <- imp_train %>%
     dplyr::group_by(model) %>%
-    # Isolamos APENAS as Top N bactérias reais que o modelo julgou cruciais
+    # Isolates ONLY the actual Top N taxa the model judged to be crucial
     dplyr::slice_max(order_by = mean_abs_shap_train, n = top_n, with_ties = FALSE) %>%
     dplyr::inner_join(imp_test, by = c("model", "variable")) %>%
     dplyr::summarize(
@@ -484,7 +484,7 @@ evaluateShapRankStability <- function(shap_raw_train, shap_raw_test, top_n = 20L
       .groups = "drop"
     ) %>%
     dplyr::mutate(
-      # Mantendo puramente numérico
+      # Keeping it purely numeric
       Spearman = round(Spearman, 3),
       Kendall = round(Kendall, 3),
       Model = dplyr::case_when(

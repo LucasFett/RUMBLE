@@ -216,7 +216,7 @@ prepareData <- function(input,
   ## ------------------------------------------------------------------
   ## 7. Build output
   ## ------------------------------------------------------------------
-  # Extraímos os features e metadados diretamente do ps_filtered
+  # Extract features and metadata directly from ps_filtered
   features <- as.data.frame(phyloseq::otu_table(ps_filtered))
   if (phyloseq::taxa_are_rows(ps_filtered)) {
     features <- as.data.frame(t(features))
@@ -230,7 +230,7 @@ prepareData <- function(input,
       n_taxa_final, " features (",
       n_taxa_total_removed, " taxa removed)")
 
-  # O resto do código (extract filtered counts) se mantém igual, pois já usa ps_filtered
+  # The rest of the code (extract filtered counts) stays the same, since it already uses ps_filtered
   filtered_counts <- as.data.frame(phyloseq::otu_table(ps_filtered))
   if (phyloseq::taxa_are_rows(ps_filtered)) {
     filtered_counts <- as.data.frame(t(filtered_counts))

@@ -42,7 +42,7 @@ utils::globalVariables(c(
   # feature frequency
   "sd_abs_contribution",
 
-  # --- Adições da Auditoria Final (Variáveis Auxiliares e Métricas) ---
+  # --- Additions from the Final Audit (Auxiliary Variables and Metrics) ---
   ".config", "Accuracy_Rate", "Best_CV_Mean", "Discrepancy_Max_Min",
   "Formatted_Value", "Generalization_Gap", "Is_Correct", "Kendall",
   "Magnitude Change (%)", "Magnitude_Change_Pct", "Mean_Inner", "Mean_Outer",

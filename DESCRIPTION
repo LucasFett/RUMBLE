@@ -1,12 +1,13 @@
 Package: RUMBLE
 Type: Package
-Title: Robust Unified Microbiome Biomarker Learning Engine
+Title: Reproducible Understanding of Microbiome Biomarkers with Leakage-free Explainability
 Version: 3.2.0
 Authors@R: 
     person("Lucas", "Fett", email = "lucas.fett2021@gmail.com",
            role = c("aut", "cre"),
            comment = c(ORCID = "0009-0006-0596-3991"))
-Description: RUMBLE (Robust Unified Microbiome Biomarker Learning Engine)
+Description: RUMBLE (Reproducible Understanding of Microbiome Biomarkers with
+    Leakage-free Explainability)
     implements a publication-quality consensus machine learning framework for
     identifying microbial biomarkers from high-throughput sequencing data.
     The package integrates multiple classification algorithms (Random Forest,
@@ -78,6 +79,7 @@ Suggests:
     kknn,
     knitr,
     magick,
+    mia,
     ranger,
     rmarkdown,
     testthat (>= 3.0.0),

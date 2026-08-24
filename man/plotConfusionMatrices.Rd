@@ -2,12 +2,16 @@
 % Please edit documentation in R/plot_functions.R
 \name{plotConfusionMatrices}
 \alias{plotConfusionMatrices}
-\title{Plot Confusion Matrices (Pooled Out-of-Fold)}
+\title{Plot Confusion Matrices (Per-Fold Mean +/- SD)}
 \usage{
 plotConfusionMatrices(final_models, target_var)
 }
 \arguments{
-\item{final_models}{Named list of model results.}
+\item{final_models}{Named list of model results. Each element's
+\code{$predictions} must contain a \code{fold} column identifying the
+outer CV fold each row came from (as produced by the pipeline's
+nested-CV loop); if absent, all predictions are treated as a single
+fold and this degrades gracefully to the old pooled behavior (SD = 0).}
 
 \item{target_var}{Character. Name of the target variable.}
 }
@@ -15,6 +19,19 @@ plotConfusionMatrices(final_models, target_var)
 A \code{ggplot} object.
 }
 \description{
-Displays confusion matrices as heatmaps with absolute counts and
-proportions for each model using pooled Out-of-Fold (OOF) predictions.
+Displays confusion matrices as heatmaps for each model, one cell per
+(Truth, Prediction) combination. Each cell shows the mean proportion of
+that outcome computed \emph{per outer CV fold} (i.e. the confusion
+matrix is built separately for every fold, row-normalized within that
+fold, and then averaged), plus the standard deviation across folds and
+the pooled total count for reference.
+}
+\details{
+This intentionally does NOT just pool every out-of-fold prediction into
+one matrix (which was the previous behavior): a single pooled matrix
+looks identical whether performance is stable across folds or wildly
+inconsistent, which reads as an uninformative/"dummy" figure. Showing
+the fold-to-fold mean +/- SD makes that variability visible, consistent
+with how \code{plotRocCurves()} and \code{plotMetricsComparison()}
+(with \code{fold_metrics} supplied) already report fold-level spread.
 }

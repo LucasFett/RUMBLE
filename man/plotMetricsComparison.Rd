@@ -4,14 +4,28 @@
 \alias{plotMetricsComparison}
 \title{Plot Metrics Comparison Barplot}
 \usage{
-plotMetricsComparison(final_models)
+plotMetricsComparison(final_models, fold_metrics = NULL)
 }
 \arguments{
-\item{final_models}{Named list of model results.}
+\item{final_models}{Named list of model results. Used only as the
+fallback data source when \code{fold_metrics} is not supplied (kept for
+backward compatibility with existing calls).}
+
+\item{fold_metrics}{Optional data.frame with one row per
+model/fold/metric (columns \code{model}, \code{fold}, \code{.metric},
+\code{.estimate}), such as the \code{all_metrics} table already
+assembled internally by \code{RUMBLE()}'s outer-CV loop. When supplied
+(recommended), bars show mean \eqn{\pm} SD across folds. When
+\code{NULL} (default), falls back to the single pooled-OOF point
+estimate in \code{final_models[[.]]$metrics}, with no error bars.}
 }
 \value{
 A \code{ggplot} object.
 }
 \description{
-Produces a grouped barplot comparing performance metrics across all models.
+Produces a grouped barplot comparing performance metrics across all
+models. When \code{fold_metrics} is supplied, bars show the mean across
+outer CV folds with an error bar for \eqn{\pm}1 SD -- consistent with the
+fold-level variability already shown in \code{plotRocCurves()} -- instead
+of a single pooled-OOF point estimate with no indication of spread.
 }

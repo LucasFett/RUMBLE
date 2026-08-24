@@ -29,7 +29,7 @@ knitr::opts_chunk$set(
 
 # Introduction
 
-The **RUMBLE** (Robust Unified Microbiome Biomarker Learning Engine) package provides a streamlined workflow for identifying robust microbial biomarkers from high-throughput sequencing data using a consensus machine learning strategy.
+The **RUMBLE** (Reproducible Understanding of Microbiome Biomarkers with Leakage-free Explainability) package provides a streamlined workflow for identifying robust microbial biomarkers from high-throughput sequencing data using a consensus machine learning strategy.
 
 The latest version integrates classical Differential Abundance (DA) analysis alongside model-agnostic interpretability through SHAP values. This enables researchers to validate complex predictive patterns using rigorous False Discovery Rate (FDR) control with methods such as **ALDEx2**, **ANCOM-BC**, or **Wilcoxon**.
 
@@ -58,7 +58,7 @@ print(ps)
 
 # Run a Fast Exploratory Analysis
 
-To keep the vignette lightweight and compilation fast, we reduce the number of folds, grid size, and SHAP repetitions. For production analyses, the default parameters are recommended (`outer_folds = 5`, `cv_folds = 5`, `grid_size = 30`, and `shap_reps = 25`).
+To keep the vignette lightweight and compilation fast, we reduce the number of folds, grid size, and SHAP repetitions. For production analyses, the default parameters are recommended (`outer_folds = 5`, `cv_folds = 5`, `grid_size = 30`, `shap_reps = 25`, and `shap_method = "exact"`).
 
 ```{r run_pipeline}
 set.seed(42)
@@ -75,8 +75,9 @@ results_fast <- RUMBLE(
   cv_folds          = 2,
   grid_size         = 10,
   shap_reps         = 2,
-  xgb_trees         = 100,
-  rf_trees          = 100,
+  shap_method       = "fast",
+  xgb_trees         = 20,
+  rf_trees          = 20,
   run_da            = TRUE,
   da_method         = "wilcoxon"
 )
